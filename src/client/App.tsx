@@ -67,6 +67,13 @@ import {
   serverNow,
 } from "./store";
 import { thumbnail } from "./shapes";
+import {
+  captureMove,
+  fitsScene,
+  movedParts,
+  moveRequest,
+  type MoveSnapshot,
+} from "./movement";
 type Tool = "select" | "build" | "move" | "duplicate";
 function Thumb({ def }: { def: Definition }) {
   const [src, setSrc] = useState("");
@@ -124,6 +131,8 @@ export default function App() {
     [color, setColor] = useState(COLORS[0].hex),
     [rotation, setRotation] = useState(0),
     [pose, setPose] = useState<Position | null>(null),
+    [drag, setDrag] = useState<MoveSnapshot | null>(null),
+    [keepPlacing, setKeepPlacing] = useState(false),
     [selected, setSelected] = useState<string[]>([]),
     [category, setCategory] = useState("All"),
     [search, setSearch] = useState(""),
@@ -144,6 +153,9 @@ export default function App() {
   const generation = useRef(0),
     duplicateIds = useRef<string[]>([]),
     held = useRef(false);
+  const pickup = useRef<MoveSnapshot | null>(null);
+  const dragRef = useRef<MoveSnapshot | null>(null);
+  const placing = useRef(false);
   const [metrics, setMetrics] = useState<FrameMetrics | null>(null);
   useEffect(() => {
     const slug = location.pathname.match(/^\/w\/([\w-]+)/)?.[1] || "workshop";
@@ -163,6 +175,9 @@ export default function App() {
       setSelected([]);
       setPose(null);
       setTool("select");
+      pickup.current = null;
+      dragRef.current = null;
+      setDrag(null);
     }
   }, [state.world?.generation]);
   const parts = useMemo(() => displayParts(), [state.parts, state.pending]),
@@ -176,6 +191,7 @@ export default function App() {
       }
     : null;
   const ghosts = useMemo<Preview[]>(() => {
+    if (drag) return movedParts(drag);
     if (!pose || tool === "select") return [];
     if (tool === "build") return [{ key, color, position: pose, rotation }];
     if (!base) return [];
@@ -189,29 +205,15 @@ export default function App() {
         z: p.position.z + pose.z - base.z,
       },
     }));
-  }, [pose, tool, key, color, rotation, JSON.stringify(selection)]);
+  }, [drag, pose, tool, key, color, rotation, JSON.stringify(selection)]);
   const valid = useMemo(
     () =>
-      ghosts.every((ghost, i) => {
-        const p = { ...ghost, id: `ghost-${i}`, revision: 0 };
-        return (
-          validPart(p) &&
-          !state.parts
-            .filter(
-              (x) =>
-                tool === "build" ||
-                tool === "duplicate" ||
-                !selected.includes(x.id),
-            )
-            .some((other) => collision(p, other)) &&
-          !ghosts
-            .slice(0, i)
-            .some((other, j) =>
-              collision(p, { ...other, id: `ghost-${j}`, revision: 0 }),
-            )
-        );
-      }),
-    [ghosts, state.parts, selected, tool],
+      fitsScene(
+        ghosts.map((g, i) => ({ ...g, id: `ghost-${i}`, revision: 0 })),
+        state.parts,
+        drag ? drag.parts.map((p) => p.id) : tool === "move" ? selected : [],
+      ),
+    [ghosts, state.parts, selected, tool, drag],
   );
   useEffect(() => {
     setIntent(ghosts[0] || null, selectionIds);
@@ -234,6 +236,7 @@ export default function App() {
         d.key.includes(search.toLowerCase())),
   );
   function beginBuild(d: Definition) {
+    cancelDrag();
     setKey(d.key);
     setTool("build");
     setSelected([]);
@@ -243,9 +246,81 @@ export default function App() {
     notice(null);
   }
   function cancel() {
+    cancelDrag();
     setTool("select");
     setPose(null);
     setIntent(null, selected);
+  }
+  function cancelDrag() {
+    pickup.current = null;
+    dragRef.current = null;
+    setDrag(null);
+  }
+  function grab(part?: Part, shift = false) {
+    if (tool !== "select" || presentation) return false;
+    const ids = part
+      ? shift
+        ? selected.includes(part.id)
+          ? selected.filter((id) => id !== part.id)
+          : [...selected, part.id]
+        : selected.includes(part.id)
+          ? selected
+          : [part.id]
+      : selected;
+    setSelected(ids);
+    setWelcome(false);
+    const current = getState();
+    if (shift || !canEdit || current.pending.length) return false;
+    const picked = current.parts.filter((p) => ids.includes(p.id));
+    if (!picked.length || !current.world) return false;
+    pickup.current = captureMove(
+      picked,
+      current.connections,
+      current.world.generation,
+    );
+    notice(null);
+    return true;
+  }
+  function dragTo(delta: Position) {
+    if (!pickup.current) return;
+    const previous = dragRef.current?.delta;
+    if (
+      previous &&
+      previous.x === delta.x &&
+      previous.y === delta.y &&
+      previous.z === delta.z
+    )
+      return;
+    const next = { ...pickup.current, delta };
+    dragRef.current = next;
+    setDrag(next);
+  }
+  function drop() {
+    const move = dragRef.current;
+    cancelDrag();
+    if (!move || !Object.values(move.delta).some(Boolean)) return;
+    const current = getState();
+    if (
+      current.world?.generation !== move.generation ||
+      current.status !== "live" ||
+      current.world.status !== "open"
+    ) {
+      notice("The workshop changed during your move. Please try again.");
+      return;
+    }
+    if (
+      !fitsScene(
+        movedParts(move),
+        current.parts,
+        move.parts.map((p) => p.id),
+      )
+    ) {
+      notice(
+        "That space is occupied or outside the workbench. Your pieces stayed in place.",
+      );
+      return;
+    }
+    void submit(moveRequest(move));
   }
   async function change(
     changes: NonNullable<Parameters<typeof submit>[0]["changes"]>,
@@ -261,7 +336,7 @@ export default function App() {
       setRotation((r) => (r + 1) % 4);
       return;
     }
-    if (!selection.length || !canEdit) return;
+    if (!selection.length || !canEdit || pickup.current) return;
     const minx = Math.min(...selection.map((p) => bounds(p).minx)),
       minz = Math.min(...selection.map((p) => bounds(p).minz)),
       maxz = Math.max(...selection.map((p) => bounds(p).maxz));
@@ -279,7 +354,7 @@ export default function App() {
     );
   }
   async function remove() {
-    if (!selection.length || !canEdit) return;
+    if (!selection.length || !canEdit || pickup.current) return;
     if (
       await change(
         selection.map((p) => ({
@@ -293,6 +368,7 @@ export default function App() {
   }
   function beginMove(duplicate = false) {
     if (!selection.length || !canEdit) return;
+    cancelDrag();
     duplicateIds.current = selection.map(() => crypto.randomUUID());
     setTool(duplicate ? "duplicate" : "move");
     setPose(null);
@@ -308,16 +384,18 @@ export default function App() {
   actions.current = { rotate, remove, beginMove, undo, cancel };
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (
         (e.target as HTMLElement)?.closest(
-          "input,textarea,button[contenteditable]",
+          'input:not([type="checkbox"]),textarea,[contenteditable="true"]',
         )
       )
         return;
       const a = actions.current;
       if (e.key === "Escape") {
+        const moving = !!pickup.current;
         a.cancel();
-        setSelected([]);
+        if (!moving) setSelected([]);
         setHelp(false);
       } else if (e.key.toLowerCase() === "r" && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
@@ -341,7 +419,7 @@ export default function App() {
     normal: THREE.Vector3 | undefined,
     part?: Part,
   ) {
-    if (tool === "select" || !canEdit) return;
+    if (tool === "select" || !canEdit || pickup.current) return;
     const step = held.current ? 1 : 6;
     const next = {
       x: Math.floor((point.x * 6 + 0.001) / step) * step,
@@ -423,7 +501,7 @@ export default function App() {
       );
       return;
     }
-    if (!ghosts.length || !canEdit) return;
+    if (!ghosts.length || !canEdit || placing.current) return;
     if (!valid) {
       notice("That space is occupied or outside the workbench.");
       return;
@@ -431,10 +509,20 @@ export default function App() {
     let accepted = false;
     if (tool === "build") {
       const id = crypto.randomUUID();
-      accepted = await submit({
-        action: "edit",
-        changes: [{ id, ...ghosts[0] }],
-      });
+      placing.current = true;
+      // Return to selection immediately while the optimistic placement saves.
+      if (!keepPlacing) {
+        cancel();
+        setSelected([id]);
+      }
+      try {
+        accepted = await submit({
+          action: "edit",
+          changes: [{ id, ...ghosts[0] }],
+        });
+      } finally {
+        placing.current = false;
+      }
     } else if (tool === "move") {
       accepted = await change(
         selection.map((p, i) => ({
@@ -460,7 +548,7 @@ export default function App() {
   }
   async function chooseColor(hex: string) {
     setColor(hex);
-    if (selection.length && tool === "select" && canEdit)
+    if (selection.length && tool === "select" && canEdit && !pickup.current)
       await change(
         selection.map((p) => ({ id: p.id, expected: p.revision, color: hex })),
       );
@@ -767,6 +855,13 @@ export default function App() {
             quality={quality}
             cameraMode={camera}
             presentation={presentation}
+            selectMode={tool === "select"}
+            canMove={canEdit && !state.pending.length}
+            dragging={!!drag}
+            onGrab={grab}
+            onDrag={dragTo}
+            onDrop={drop}
+            onCancelDrag={cancelDrag}
             onMetrics={inspector ? setMetrics : undefined}
             onHover={hover}
             onClick={(p, shift) => void click(p, shift)}
@@ -847,8 +942,8 @@ export default function App() {
               </h3>
               <p>
                 {selection.length === 1
-                  ? `Revision ${selection[0].revision} · ${selectedConnections(selectionIds).length} connections`
-                  : "Move and edit these pieces together."}
+                  ? "Drag to move. Use the arrows to adjust height or one axis."
+                  : "Drag a selected piece to move them together."}
               </p>
               <div className="selection-actions">
                 <button onClick={() => beginMove()} disabled={!canEdit}>
@@ -913,6 +1008,14 @@ export default function App() {
                   <span className={`hint-dot ${valid ? "" : "invalid"}`} />
                   {BY_KEY[key].name}
                   <span className="hint-divider" />
+                  <label className="keep-placing">
+                    <input
+                      type="checkbox"
+                      checked={keepPlacing}
+                      onChange={(e) => setKeepPlacing(e.target.checked)}
+                    />
+                    Keep placing
+                  </label>
                   <kbd>R</kbd> rotate<kbd>esc</kbd> cancel
                 </>
               ) : tool === "move" || tool === "duplicate" ? (
@@ -925,9 +1028,15 @@ export default function App() {
               ) : (
                 <>
                   <MousePointer2 size={14} />
-                  Drag to orbit
+                  {drag
+                    ? "Release to place · Esc to cancel"
+                    : selection.length
+                      ? "Drag a piece or an arrow to move"
+                      : "Click a piece to select"}
                   <span className="hint-divider" />
-                  Shift-click to select more
+                  {selection.length
+                    ? "Shift-click to select more"
+                    : "Drag the background to orbit"}
                 </>
               )}
             </div>
@@ -1151,13 +1260,20 @@ export default function App() {
             <p>
               Choose a piece from the drawer and click the workbench to place
               it. Green means it fits. Your friends see it as soon as it’s
-              saved.
+              saved. Enable Keep placing to add several of the same piece.
             </p>
             <div className="help-rows">
               <div>
                 <kbd>drag</kbd>
                 <span>
-                  Orbit the camera. Right-drag to pan, scroll to zoom.
+                  Move a piece at its current height. Drag the background to
+                  orbit. Right-drag to pan, scroll to zoom.
+                </span>
+              </div>
+              <div>
+                <kbd>X Y Z</kbd>
+                <span>
+                  Click a piece to reveal arrows. Drag Y to raise or lower it.
                 </span>
               </div>
               <div>
@@ -1170,7 +1286,9 @@ export default function App() {
               </div>
               <div>
                 <kbd>M</kbd>
-                <span>Move your selection. ⌘D makes a copy.</span>
+                <span>
+                  Pick up your selection, then click to place. ⌘D makes a copy.
+                </span>
               </div>
               <div>
                 <kbd>⌘ Z</kbd>

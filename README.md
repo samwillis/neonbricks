@@ -32,17 +32,20 @@ Keep `.env.local`, `.neon`, and `.tools/` private. The browser needs only `VITE_
 
 ## Controls and demonstration
 
-Pick a part and click the board to place it. Green previews fit; red previews conflict. Hover another part for a compatible connector pose. Use the build-layer buttons for explicit height, or hold Alt for sixth-stud positioning.
+Pick a part and click the board to place it, then return to selection. Enable **Keep placing** to add several of the same piece. While placing, click an existing brick to stack or attach the new piece. Green previews fit; red previews conflict. Hover another part for a compatible connector pose. Use the build-layer buttons for explicit height, or hold Alt for sixth-stud positioning.
 
-| Action           | Control                                          |
-| ---------------- | ------------------------------------------------ |
-| Camera           | Drag to orbit, right-drag to pan, scroll to zoom |
-| Rotate           | R                                                |
-| Select several   | Shift-click                                      |
-| Move / duplicate | M / Cmd-or-Ctrl D                                |
-| Delete           | Delete or Backspace                              |
-| Undo / redo      | Cmd-or-Ctrl Z / Shift Cmd-or-Ctrl Z              |
-| Cancel           | Escape                                           |
+Click an existing piece to select it and reveal the X/Y/Z arrows. Drag the piece to move it horizontally at its current height, preserving your grab point. Drag an arrow to constrain movement; Y raises or lowers the selection in plate increments. Shift-click adds or removes pieces; dragging an already selected piece moves the group together. Release submits one edit for the whole selection. Escape cancels; an invalid drop leaves the originals in place. Revisions and incident connections captured at pickup let Postgres reject a conflicting concurrent edit.
+
+| Action             | Control                                                         |
+| ------------------ | --------------------------------------------------------------- |
+| Camera             | Drag the background to orbit, right-drag to pan, scroll to zoom |
+| Move directly      | Drag a piece, or drag its X/Y/Z arrow                           |
+| Rotate             | R                                                               |
+| Select several     | Shift-click                                                     |
+| Pickup / duplicate | M, then click to place / Cmd-or-Ctrl D                          |
+| Delete             | Delete or Backspace                                             |
+| Undo / redo        | Cmd-or-Ctrl Z / Shift Cmd-or-Ctrl Z                             |
+| Cancel             | Escape                                                          |
 
 The room menu creates a rover room or blank canvas. Share that room's URL with a second browser/profile. Rename builders from their avatar. The creator can restore the starter, clear, close, and reopen their own room. Use presentation mode to hide the drawer and editing tools; the inspector shows transaction IDs, pending work, connection counts, and frame timing.
 

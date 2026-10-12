@@ -10,8 +10,10 @@ import * as THREE from "three";
 import type { OrbitControls as OrbitImpl } from "three-stdlib";
 import { CATALOGUE, BY_KEY } from "../shared/catalogue";
 import type { Part, Preview, Viewer } from "../shared/types";
-import { dimensions } from "../shared/geometry";
+import { dimensions, bounds as boundsForHandles } from "../shared/geometry";
 import { model } from "./shapes";
+import type { Position } from "../shared/types";
+import { installGestures } from "./gestures";
 export type FrameMetrics = {
   p95: number;
   fps: number;
@@ -31,6 +33,13 @@ type Props = {
   quality: boolean;
   cameraMode: string;
   presentation: boolean;
+  selectMode: boolean;
+  canMove: boolean;
+  dragging: boolean;
+  onGrab: (part?: Part, shift?: boolean) => boolean;
+  onDrag: (delta: Position) => void;
+  onDrop: () => void;
+  onCancelDrag: () => void;
   onMetrics?: (m: FrameMetrics) => void;
   onHover: (
     point: THREE.Vector3,
@@ -139,6 +148,7 @@ function Instances({
     e.stopPropagation();
     onClick(bySlot.current.get(e.instanceId ?? -1), e.shiftKey);
   };
+  const pickData = { partAt: (i: number) => bySlot.current.get(i) };
   return (
     <group>
       <instancedMesh
@@ -149,6 +159,7 @@ function Instances({
         onPointerMove={hover}
         onClick={click}
         dispose={null}
+        userData={pickData}
       >
         <meshStandardMaterial roughness={0.31} metalness={0.02} />
       </instancedMesh>
@@ -161,6 +172,7 @@ function Instances({
           onPointerMove={hover}
           onClick={click}
           dispose={null}
+          userData={pickData}
         >
           <meshStandardMaterial roughness={0.4} metalness={0.16} />
         </instancedMesh>
@@ -190,7 +202,7 @@ function Piece({
       ]}
       rotation={[0, (-r * Math.PI) / 2, 0]}
     >
-      <mesh geometry={g.body} dispose={null}>
+      <mesh geometry={g.body} dispose={null} raycast={() => {}}>
         <meshStandardMaterial
           color={tint || part.color}
           transparent
@@ -200,7 +212,7 @@ function Piece({
         />
       </mesh>
       {g.detail && (
-        <mesh geometry={g.detail} dispose={null}>
+        <mesh geometry={g.detail} dispose={null} raycast={() => {}}>
           <meshStandardMaterial
             color={tint || part.color}
             transparent
@@ -244,6 +256,117 @@ function Camera({ mode }: { mode: string }) {
         RIGHT: THREE.MOUSE.PAN,
       }}
     />
+  );
+}
+
+// Capture runs before OrbitControls' native pointer listener, so a brick never
+// starts a camera gesture. Native pointer capture also covers release off-board.
+function Gestures(p: Props) {
+  const { gl, camera, scene, controls } = useThree();
+  const latest = useRef(p);
+  const abort = useRef<() => void>(() => {});
+  latest.current = p;
+  useEffect(() => {
+    const gestures = installGestures(
+      gl.domElement,
+      camera,
+      scene,
+      controls as OrbitImpl | null,
+      () => latest.current,
+    );
+    abort.current = gestures.cancel;
+    return gestures.dispose;
+  }, [gl, camera, scene, controls]);
+  useEffect(() => {
+    if (!p.canMove || p.presentation || !p.selectMode) abort.current();
+  }, [p.canMove, p.presentation, p.selectMode]);
+  useEffect(() => {
+    abort.current();
+  }, [p.generation, p.cameraMode]);
+  return null;
+}
+
+function MoveHandles({ parts }: { parts: Part[] }) {
+  const root = useRef<THREE.Group>(null);
+  const labels = useRef<Array<HTMLSpanElement | null>>([]);
+  const { camera, size } = useThree();
+  const center = useMemo(() => {
+    const bs = parts.map(boundsForHandles);
+    return new THREE.Vector3(
+      (Math.min(...bs.map((b) => b.minx)) +
+        Math.max(...bs.map((b) => b.maxx))) /
+        12,
+      Math.max(...bs.map((b) => b.maxy)) / 6 + 0.12,
+      (Math.min(...bs.map((b) => b.minz)) +
+        Math.max(...bs.map((b) => b.maxz))) /
+        12,
+    );
+  }, [parts]);
+  useFrame(() => {
+    if (!root.current) return;
+    root.current.scale.setScalar(
+      (camera.position.distanceTo(center) *
+        Math.tan(
+          THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov / 2),
+        ) *
+        120) /
+        size.height,
+    );
+    const direction = camera.getWorldDirection(new THREE.Vector3());
+    root.current.children.forEach((child, i) => {
+      child.visible = Math.abs(direction[(["x", "y", "z"] as const)[i]]) < 0.98;
+      const label = labels.current[i];
+      if (label) label.style.display = child.visible ? "" : "none";
+    });
+  });
+  return (
+    <group ref={root} position={center}>
+      {(["x", "y", "z"] as const).map((axis, i) => (
+        <group
+          key={axis}
+          rotation={
+            axis === "x"
+              ? [0, 0, -Math.PI / 2]
+              : axis === "z"
+                ? [Math.PI / 2, 0, 0]
+                : [0, 0, 0]
+          }
+        >
+          <mesh position={[0, 0.65, 0]} renderOrder={10} raycast={() => {}}>
+            <cylinderGeometry args={[0.025, 0.025, 1.3, 12]} />
+            <meshBasicMaterial
+              color={["#cb715b", "#289b74", "#588db5"][i]}
+              depthTest={false}
+            />
+          </mesh>
+          <mesh position={[0, 1.4, 0]} renderOrder={10} raycast={() => {}}>
+            <coneGeometry args={[0.09, 0.28, 16]} />
+            <meshBasicMaterial
+              color={["#cb715b", "#289b74", "#588db5"][i]}
+              depthTest={false}
+            />
+          </mesh>
+          <mesh position={[0, 0.85, 0]} userData={{ moveAxis: axis }}>
+            <cylinderGeometry args={[0.15, 0.15, 1.4, 8]} />
+            <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+          </mesh>
+          <Html
+            position={[0, 1.75, 0]}
+            center
+            style={{ pointerEvents: "none" }}
+          >
+            <span
+              ref={(el) => {
+                labels.current[i] = el;
+              }}
+              className={`move-axis axis-${axis}`}
+            >
+              {axis.toUpperCase()}
+            </span>
+          </Html>
+        </group>
+      ))}
+    </group>
   );
 }
 function Contents(p: Props) {
@@ -319,6 +442,7 @@ function Contents(p: Props) {
         />
       )}
       <Camera mode={p.cameraMode} />
+      <Gestures {...p} />
       {CATALOGUE.map((d) => (
         <Instances
           key={d.key}
@@ -335,6 +459,7 @@ function Contents(p: Props) {
           return (
             <mesh
               key={part.id}
+              raycast={() => {}}
               position={[
                 (part.position.x + d.x / 2) / 6,
                 (part.position.y + d.y / 2) / 6,
@@ -349,6 +474,19 @@ function Contents(p: Props) {
             </mesh>
           );
         })}
+      {!p.presentation && p.selectMode && p.canMove && selected.length > 0 && (
+        <MoveHandles
+          parts={
+            p.dragging
+              ? p.ghosts.map((g, i) => ({
+                  ...g,
+                  id: `handle-${i}`,
+                  revision: 0,
+                }))
+              : selected
+          }
+        />
+      )}
       {!p.presentation &&
         p.ghosts.map((part, i) => (
           <Piece
@@ -373,6 +511,7 @@ function Contents(p: Props) {
                   return (
                     <mesh
                       key={part.id}
+                      raycast={() => {}}
                       position={[
                         (part.position.x + d.x / 2) / 6,
                         (part.position.y + d.y / 2) / 6,
