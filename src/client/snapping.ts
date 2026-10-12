@@ -43,6 +43,10 @@ export function snapToSurface(
     surface.normal.y > 0.5 ||
     (!!targetBox && surface.point.y >= targetBox.maxy - 1);
   const bottom = surface.normal.y < -0.5;
+  // Catch studs from the upper side of a brick too: users should not have to
+  // aim at a narrow top polygon or adjust a separate build-layer control.
+  const topEdge =
+    automatic && !bottom && !!targetBox && surface.point.y > targetBox.maxy - 3;
   const fallback = { ...desired };
   if (automatic && top) fallback.y = (targetBox?.maxy || 0) - box.miny;
   else if (automatic && bottom && targetBox)
@@ -56,7 +60,7 @@ export function snapToSurface(
   if (!target) return { delta: fallback, parts: translated(sources, fallback) };
 
   const targets = connectorList(target).filter((c) => {
-    if (c.type === "stud") return top && !options.fine;
+    if (c.type === "stud") return (top || topEdge) && !options.fine;
     if (c.type === "socket") return bottom && !options.fine;
     return distance(c.at, surface.point) <= 8 ** 2;
   });
@@ -79,7 +83,12 @@ export function snapToSurface(
           };
           if (!automatic && delta.y !== desired.y) continue;
           const vertical = local.type === "stud" || local.type === "socket";
-          const preference = vertical ? fallback : desired;
+          const preference =
+            local.type === "socket" && topEdge
+              ? { ...desired, y: targetBox!.maxy - box.miny }
+              : vertical
+                ? fallback
+                : desired;
           const error = distance(delta, preference);
           // Magnets stay close to the intended pose instead of jumping to a
           // remote connector on a large part or another member of a group.

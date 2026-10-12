@@ -24,6 +24,77 @@ const connects = (a: Part, b: Part) =>
 const up = { x: 0, y: 1, z: 0 };
 
 describe("surface and attachment snapping", () => {
+  it("catches top studs while dragging over the upper side of a brick", () => {
+    const source = part("a", "brick-1x1", -30),
+      target = part("target", "brick-2x2", 0, 6);
+    const snap = snapToSurface(
+      [source],
+      {
+        part: target,
+        point: { x: 12, y: 10, z: 3 },
+        normal: { x: 1, y: 0, z: 0 },
+      },
+      { x: 36, y: 6, z: 0 },
+      [source, target],
+      { excluded: [source.id] },
+    );
+    expect(snap.parts[0].position).toEqual({ x: 6, y: 12, z: 0 });
+    expect(connects(snap.parts[0], target)).toBe(true);
+    expect(fitsScene(snap.parts, [target])).toBe(true);
+  });
+
+  it("keeps lower-side placement beside the brick instead of lifting it", () => {
+    const source = part("a", "brick-1x1", -30),
+      target = part("target", "brick-2x2", 0, 6);
+    const snap = snapToSurface(
+      [source],
+      {
+        part: target,
+        point: { x: 12, y: 7, z: 3 },
+        normal: { x: 1, y: 0, z: 0 },
+      },
+      { x: 36, y: 6, z: 0 },
+      [target],
+    );
+    expect(snap.parts[0].position).toEqual({ x: 12, y: 6, z: 0 });
+    expect(connects(snap.parts[0], target)).toBe(false);
+  });
+
+  it("leaves fine placement free of the upper-edge stud magnet", () => {
+    const source = part("a", "brick-1x1", -30),
+      target = part("target", "brick-2x2", 0, 6);
+    const snap = snapToSurface(
+      [source],
+      {
+        part: target,
+        point: { x: 12, y: 10, z: 3 },
+        normal: { x: 1, y: 0, z: 0 },
+      },
+      { x: 36, y: 6, z: 0 },
+      [target],
+      { fine: true },
+    );
+    expect(snap.parts[0].position).toEqual({ x: 12, y: 6, z: 0 });
+  });
+
+  it("keeps an occupied upper-edge attachment invalid at the intended height", () => {
+    const source = part("a", "brick-1x1", -30),
+      target = part("target", "brick-2x2", 0, 6),
+      blocker = part("blocker", "brick-2x2", 0, 12);
+    const snap = snapToSurface(
+      [source],
+      {
+        part: target,
+        point: { x: 12, y: 10, z: 3 },
+        normal: { x: 1, y: 0, z: 0 },
+      },
+      { x: 36, y: 6, z: 0 },
+      [target, blocker],
+    );
+    expect(snap.parts[0].position).toEqual({ x: 6, y: 12, z: 0 });
+    expect(fitsScene(snap.parts, [target, blocker])).toBe(false);
+  });
+
   it("snaps onto the logical stud height and an off-grid target, preserving the grabbed socket", () => {
     const source = part("a", "brick-1x1", -30),
       target = part("target", "brick-2x2", 1, 6, 5);

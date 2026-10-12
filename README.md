@@ -2,7 +2,7 @@
 
 A collaborative Three.js construction workshop. Postgres stores the model, connections, guests, presence, history, and command receipts. Neon Functions validate edits, and Neon Realtime publishes the committed scene.
 
-The demo includes 36 procedural parts, 12 colours, a starter rover and workbench, placement and connector snapping, multi-selection, move/copy/rotate/recolour/delete, personal undo/redo, collaborator previews and selection outlines, camera presets, presentation mode, and a demo inspector.
+The demo includes 36 procedural parts, 12 colours, a starter rover and workbench, placement and connector snapping, multi-selection, move/copy/rotate/recolour/delete, personal undo/redo, collaborator previews and selection outlines, camera presets, presentation mode, light and dark themes, and a demo inspector.
 
 Mechanical assemblies are static. Axles and pins fit authored holes; gears have fixed cardinal mesh poses; hinge leaves pair in a coplanar pose. Free-angle joints, physical simulation, and motors belong to the subsequent phases in [PLAN.md](PLAN.md).
 
@@ -32,7 +32,7 @@ Keep `.env.local`, `.neon`, and `.tools/` private. The browser needs only `VITE_
 
 ## Controls and demonstration
 
-Pick a part and click the board to place it, then return to selection. Enable **Keep placing** to add several of the same piece. While placing, click an existing brick to stack or attach the new piece. Green previews fit; red previews conflict. Hover another part for a compatible connector pose. Use the build-layer buttons for explicit height, or hold Alt for sixth-stud positioning.
+Pick a part and click the board to place it, then return to selection. Enable **Keep placing** to add several of the same piece. While placing, click an existing brick to stack or attach the new piece. Green previews fit; red previews conflict. Hover another part for a compatible connector pose. Hover the upper edge of a brick to catch its studs, or hold Alt for sixth-stud positioning. Use the Y arrow after selection for explicit height.
 
 Click an existing piece to select it and reveal the X/Y/Z arrows. Drag onto another part to snap to its top, side, or compatible connector, preserving your grab point. Away from other parts, dragging keeps the original height. Placement, M pickup, and copying use the same surface and connector snapping. New mechanical pieces can orient automatically to a fitting connector; moving a selection preserves its rotations and relative positions. Drag an arrow to constrain movement; Y raises or lowers the selection in plate increments. Shift-click adds or removes pieces; dragging an already selected piece moves the group together. Release submits one edit for the whole selection. Escape cancels; an invalid drop leaves the originals in place. Revisions and incident connections captured at pickup let Postgres reject a conflicting concurrent edit.
 
@@ -48,6 +48,8 @@ Click an existing piece to select it and reveal the X/Y/Z arrows. Drag onto anot
 | Cancel             | Escape                                                          |
 
 The room menu creates a rover room or blank canvas. Share that room's URL with a second browser/profile. Rename builders from their avatar. The creator can restore the starter, clear, close, and reopen their own room. Use presentation mode to hide the drawer and editing tools; the inspector shows transaction IDs, pending work, connection counts, and frame timing.
+
+The **Appearance** button in the header selects Light, Dark, or System. System follows your operating system; an explicit choice persists in this browser and synchronizes across open tabs. The panels, thumbnails, board, lighting, and selection indicators all follow the theme. The interface takes its typography and palette from neon.com. Its custom `neonbricks` wordmark matches the Databricks lettering, with a stylised line-drawn brick symbol on the left. Inter and the logo are bundled locally; provenance and the font licence are recorded under `public/brand/` and `public/fonts/`.
 
 For a presentation, create your own rover workshop and keep its URL. Reset that room between demonstrations. The default shared workshop is independent of visitor-created rooms and cannot be reset by a visitor.
 

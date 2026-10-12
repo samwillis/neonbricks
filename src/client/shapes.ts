@@ -247,8 +247,9 @@ export function model(d: Definition): Model {
 }
 let thumbnailRenderer: THREE.WebGLRenderer | undefined;
 const thumbs = new Map<string, string>();
-export function thumbnail(d: Definition) {
-  if (thumbs.has(d.key)) return thumbs.get(d.key)!;
+export function thumbnail(d: Definition, theme: "light" | "dark") {
+  const cacheKey = `${d.key}:${theme}`;
+  if (thumbs.has(cacheKey)) return thumbs.get(cacheKey)!;
   if (!thumbnailRenderer) {
     thumbnailRenderer = new THREE.WebGLRenderer({
       alpha: true,
@@ -264,15 +265,21 @@ export function thumbnail(d: Definition) {
     group = new THREE.Group();
   const color =
     d.shape === "wheel"
-      ? "#3c4445"
+      ? theme === "dark"
+        ? "#737f8c"
+        : "#3c4445"
       : d.category === "Mechanics"
-        ? "#b9aa88"
+        ? theme === "dark"
+          ? "#b0bbc8"
+          : "#83929c"
         : d.category === "Shapes"
           ? "#edbc46"
-          : "#91b9a7";
+          : theme === "dark"
+            ? "#34d59a"
+            : "#37c38f";
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.32 }),
     detailMat = new THREE.MeshStandardMaterial({
-      color: "#888c87",
+      color: "#b2bcc7",
       roughness: 0.4,
     });
   group.add(new THREE.Mesh(m.body, mat));
@@ -280,7 +287,7 @@ export function thumbnail(d: Definition) {
   group.position.set(-d.w / 2, -d.h / 6, -d.d / 2);
   scene.add(group);
   scene.add(new THREE.AmbientLight("#ffffff", 2.4));
-  const light = new THREE.DirectionalLight("#fff0d5", 4);
+  const light = new THREE.DirectionalLight("#ffffff", 4);
   light.position.set(-4, 8, 5);
   scene.add(light);
   const size = Math.max(d.w, d.d, d.h / 3) * 0.78 + 0.25,
@@ -296,7 +303,7 @@ export function thumbnail(d: Definition) {
   camera.lookAt(0, 0, 0);
   thumbnailRenderer.render(scene, camera);
   const url = thumbnailRenderer.domElement.toDataURL("image/png");
-  thumbs.set(d.key, url);
+  thumbs.set(cacheKey, url);
   mat.dispose();
   detailMat.dispose();
   return url;

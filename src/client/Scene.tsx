@@ -23,6 +23,7 @@ export type FrameMetrics = {
   samples: number;
 };
 type Props = {
+  theme: "light" | "dark";
   parts: Part[];
   selected: string[];
   ghosts: Preview[];
@@ -112,7 +113,7 @@ function Instances({
       body.current.setMatrixAt(i, temp.matrix);
       detail.current?.setMatrixAt(i, temp.matrix);
       color.set(def.shape === "wheel" ? "#343b3a" : p.color);
-      if (selected.includes(p.id)) color.lerp(new THREE.Color("#fff9d8"), 0.35);
+      if (selected.includes(p.id)) color.lerp(new THREE.Color("#ffffff"), 0.25);
       body.current.setColorAt(i, color);
       detail.current?.setColorAt(
         i,
@@ -353,6 +354,7 @@ function MoveHandles({ parts }: { parts: Part[] }) {
           </mesh>
           <Html
             position={[0, 1.75, 0]}
+            zIndexRange={[5, 0]}
             center
             style={{ pointerEvents: "none" }}
           >
@@ -371,6 +373,26 @@ function MoveHandles({ parts }: { parts: Part[] }) {
   );
 }
 function Contents(p: Props) {
+  const dark = p.theme === "dark";
+  const palette = dark
+    ? {
+        background: "#101214",
+        floor: "#14181c",
+        edge: "#242a30",
+        board: "#30383d",
+        grid: "#525f65",
+        minorGrid: "#414c52",
+        accent: "#34d59a",
+      }
+    : {
+        background: "#edf0f2",
+        floor: "#e8ecef",
+        edge: "#b9c4ca",
+        board: "#d8e1e4",
+        grid: "#a0b2ba",
+        minorGrid: "#bccbd0",
+        accent: "#087b56",
+      };
   const selected = p.parts.filter((part) => p.selected.includes(part.id));
   const groups = useMemo(
     () =>
@@ -382,14 +404,14 @@ function Contents(p: Props) {
   return (
     <>
       {p.onMetrics && <FrameStats onMetrics={p.onMetrics} />}
-      <color attach="background" args={["#eae8e1"]} />
-      <fog attach="fog" args={["#eae8e1", 65, 120]} />
-      <ambientLight intensity={1.4} color="#fff5e8" />
-      <hemisphereLight args={["#f6f1e5", "#bbb7ad", 2]} />
+      <color attach="background" args={[palette.background]} />
+      <fog attach="fog" args={[palette.background, 65, 120]} />
+      <ambientLight intensity={dark ? 1.1 : 1.4} color="#ffffff" />
+      <hemisphereLight args={["#eff5ff", dark ? "#748494" : "#c6cfd4", 2]} />
       <directionalLight
         position={[-12, 24, 10]}
         intensity={3.7}
-        color="#fff4df"
+        color="#ffffff"
         castShadow
         shadow-mapSize={p.quality ? [1024, 1024] : [2048, 2048]}
         shadow-camera-left={-22}
@@ -410,11 +432,11 @@ function Contents(p: Props) {
         receiveShadow
       >
         <planeGeometry args={[160, 160]} />
-        <meshStandardMaterial color="#e7e4dc" roughness={0.92} />
+        <meshStandardMaterial color={palette.floor} roughness={0.92} />
       </mesh>
       <mesh position={[0, -0.23, 0]} receiveShadow>
         <boxGeometry args={[32.2, 0.34, 32.2]} />
-        <meshStandardMaterial color="#c9c9bb" roughness={0.75} />
+        <meshStandardMaterial color={palette.edge} roughness={0.75} />
       </mesh>
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
@@ -434,11 +456,11 @@ function Contents(p: Props) {
         }}
       >
         <planeGeometry args={[32, 32]} />
-        <meshStandardMaterial color="#dddfd0" roughness={0.84} />
+        <meshStandardMaterial color={palette.board} roughness={0.84} />
       </mesh>
       {p.grid && !p.presentation && (
         <gridHelper
-          args={[32, 32, "#b5bdac", "#c7cdbd"]}
+          args={[32, 32, palette.grid, palette.minorGrid]}
           position={[0, -0.043, 0]}
         />
       )}
@@ -471,7 +493,7 @@ function Contents(p: Props) {
                 args={[d.x / 6 + 0.035, d.y / 6 + 0.035, d.z / 6 + 0.035]}
               />
               <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-              <Edges color="#279371" lineWidth={1.5} threshold={15} />
+              <Edges color={palette.accent} lineWidth={1.5} threshold={15} />
             </mesh>
           );
         })}
@@ -494,7 +516,7 @@ function Contents(p: Props) {
             key={i}
             part={part}
             opacity={0.62}
-            tint={p.valid ? "#49ac87" : "#d36455"}
+            tint={p.valid ? "#34d59a" : "#f77569"}
           />
         ))}
       {!p.presentation &&
@@ -532,6 +554,7 @@ function Contents(p: Props) {
                   );
                 })}
               <Html
+                zIndexRange={[5, 0]}
                 position={
                   v.preview
                     ? [
@@ -556,9 +579,9 @@ function Contents(p: Props) {
           ))}
       {!p.quality && (
         <ContactShadows
-          key={p.parts.map((p) => `${p.id}:${p.revision}`).join(",")}
+          key={`${p.theme}:${p.parts.map((p) => `${p.id}:${p.revision}`).join(",")}`}
           position={[0, -0.039, 0]}
-          opacity={0.28}
+          opacity={dark ? 0.4 : 0.28}
           scale={34}
           blur={2.3}
           far={8}

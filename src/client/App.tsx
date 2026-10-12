@@ -15,12 +15,9 @@ import {
   ChevronRight,
   Search,
   Plus,
-  Minus,
   Link2,
   Check,
   Box,
-  Layers3,
-  Cog,
   ArrowUpRight,
   HelpCircle,
   X,
@@ -31,6 +28,9 @@ import {
   Focus,
   PanelRight,
   UserRound,
+  Sun,
+  Moon,
+  Monitor,
 } from "lucide-react";
 import * as THREE from "three";
 import Scene, { type FrameMetrics } from "./Scene";
@@ -70,29 +70,23 @@ import {
   type MoveSnapshot,
 } from "./movement";
 import { snapToSurface, type DragSurface } from "./snapping";
+import { useTheme, type Theme } from "./theme";
 type Tool = "select" | "build" | "move" | "duplicate";
-function Thumb({ def }: { def: Definition }) {
+function Thumb({ def, theme }: { def: Definition; theme: Theme }) {
   const [src, setSrc] = useState("");
   useEffect(() => {
     try {
-      setSrc(thumbnail(def));
+      setSrc(thumbnail(def, theme));
     } catch {}
-  }, [def]);
+  }, [def, theme]);
   return src ? <img src={src} alt="" draggable={false} /> : <Box size={32} />;
 }
 function Logo() {
   return (
-    <span className="brand">
-      <span className="brand-mark">
-        <i />
-        <i />
-        <b />
-      </span>
-      <span>
-        neon<span className="brand-divider">/</span>
-        <strong>bricks</strong>
-      </span>
-    </span>
+    <svg className="brand" viewBox="0 0 220 36" aria-hidden="true">
+      <use className="brand-symbol" href="/brand/neonbricks.svg#brick" />
+      <use href="/brand/neonbricks.svg#wordmark" />
+    </svg>
   );
 }
 function ToolButton({
@@ -121,6 +115,29 @@ function ToolButton({
   );
 }
 export default function App() {
+  const { theme, preference, setPreference } = useTheme();
+  const [themeMenu, setThemeMenu] = useState(false);
+  const themeControl = useRef<HTMLDivElement>(null);
+  const themeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!themeMenu) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!themeControl.current?.contains(event.target as Node))
+        setThemeMenu(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setThemeMenu(false);
+        themeButton.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [themeMenu]);
   const state = useWorkshop(),
     [tool, setTool] = useState<Tool>("select"),
     [key, setKey] = useState("brick-2x4"),
@@ -142,8 +159,6 @@ export default function App() {
     [nameMenu, setNameMenu] = useState(false),
     [name, setName] = useState(""),
     [copied, setCopied] = useState(false),
-    [autoHeight, setAutoHeight] = useState(true),
-    [layer, setLayer] = useState(0),
     [tick, setTick] = useState(0),
     [welcome, setWelcome] = useState(true);
   const generation = useRef(0),
@@ -430,9 +445,7 @@ export default function App() {
     const step = held.current ? 1 : 6;
     const next = {
       x: Math.floor((point.x * 6 + 0.001) / step) * step,
-      y: autoHeight
-        ? Math.max(0, Math.round((point.y * 6 + 0.01) / 2) * 2)
-        : layer * 2,
+      y: Math.max(0, Math.round((point.y * 6 + 0.01) / 2) * 2),
       z: Math.floor((point.z * 6 + 0.001) / step) * step,
     };
     const source: Part = {
@@ -457,7 +470,6 @@ export default function App() {
       state.parts,
       {
         excluded: tool === "move" ? selected : [],
-        autoHeight,
         fine: held.current,
         rotate: tool === "build",
       },
@@ -574,10 +586,9 @@ export default function App() {
             <span>{state.world?.title || "The little workshop"}</span>
             <ChevronDown size={14} />
           </button>
-          <span className="room-subtitle">A shared workbench</span>
           {roomMenu && (
             <div className="popover room-popover">
-              <div className="popover-heading">MAKE ROOM FOR AN IDEA</div>
+              <div className="popover-heading">WORKSHOPS</div>
               <button
                 onClick={() =>
                   void newRoom(false).catch((e) => notice(e.message))
@@ -649,10 +660,64 @@ export default function App() {
           </div>
           <span>{Math.max(1, viewers.length)} here</span>
         </div>
-        <button className="invite-button" onClick={() => void invite()}>
+        <button
+          className="invite-button"
+          aria-label={copied ? "Link copied" : "Invite"}
+          onClick={() => void invite()}
+        >
           {copied ? <Check size={16} /> : <Link2 size={16} />}
-          <span>{copied ? "Link copied" : "Invite a friend"}</span>
+          <span>{copied ? "Link copied" : "Invite"}</span>
         </button>
+        <div className="theme-control" ref={themeControl}>
+          <button
+            ref={themeButton}
+            className="icon-button theme-button"
+            aria-label="Appearance"
+            title={`Appearance: ${preference}`}
+            aria-expanded={themeMenu}
+            aria-controls="appearance-options"
+            onClick={() => setThemeMenu((v) => !v)}
+          >
+            {preference === "system" ? (
+              <Monitor size={18} />
+            ) : theme === "dark" ? (
+              <Moon size={18} />
+            ) : (
+              <Sun size={18} />
+            )}
+          </button>
+          {themeMenu && (
+            <div
+              id="appearance-options"
+              className="popover theme-popover"
+              role="group"
+              aria-label="Appearance options"
+            >
+              <div className="popover-heading">APPEARANCE</div>
+              {(
+                [
+                  { value: "light", label: "Light", icon: Sun },
+                  { value: "dark", label: "Dark", icon: Moon },
+                  { value: "system", label: "System", icon: Monitor },
+                ] as const
+              ).map(({ value, label, icon: Icon }) => (
+                <button
+                  key={value}
+                  aria-pressed={preference === value}
+                  onClick={() => {
+                    setPreference(value);
+                    setThemeMenu(false);
+                    themeButton.current?.focus();
+                  }}
+                >
+                  <Icon size={16} />
+                  {label}
+                  {preference === value && <Check size={14} />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           className="icon-button help-button"
           title="How to build"
@@ -704,9 +769,8 @@ export default function App() {
         <aside className="drawer">
           <div className="drawer-heading">
             <div>
-              <span className="eyebrow">GOOD THINGS COME IN PIECES</span>
               <h1>
-                The parts drawer<span>.</span>
+                Parts<span>.</span>
               </h1>
             </div>
             <span className="count-badge">36</span>
@@ -715,7 +779,7 @@ export default function App() {
             <Search size={16} />
             <input
               aria-label="Search parts"
-              placeholder="Find your next piece…"
+              placeholder="Search parts…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -724,35 +788,21 @@ export default function App() {
                 <X size={13} />
               </button>
             )}
-            <span className="search-shortcut">⌕</span>
           </div>
           <div className="categories">
-            {[
-              { name: "All", icon: Blocks },
-              { name: "Bricks", icon: Box },
-              { name: "Plates", icon: Layers3 },
-              { name: "Mechanics", icon: Cog },
-            ].map(({ name, icon: Icon }) => (
+            {["All", "Bricks", "Plates", "Mechanics"].map((name) => (
               <button
                 key={name}
                 className={category === name ? "chosen" : ""}
                 onClick={() => setCategory(name)}
                 title={name}
+                aria-pressed={category === name}
               >
-                <Icon size={15} />
                 <span>{name}</span>
               </button>
             ))}
           </div>
           <div className="parts-list">
-            <div className="section-label">
-              <span>
-                {category === "All"
-                  ? "A LITTLE OF EVERYTHING"
-                  : category.toUpperCase()}
-              </span>
-              <span>{filtered.length} pieces</span>
-            </div>
             <div className="parts-grid">
               {filtered.map((d) => (
                 <button
@@ -763,7 +813,7 @@ export default function App() {
                   onClick={() => beginBuild(d)}
                 >
                   <span className="part-thumb">
-                    <Thumb def={d} />
+                    <Thumb def={d} theme={theme} />
                     {tool === "build" && key === d.key && (
                       <span className="pick-mark">
                         <Check size={10} />
@@ -796,7 +846,7 @@ export default function App() {
           </div>
           <div className="color-drawer">
             <div className="section-label">
-              <span>A SPLASH OF COLOUR</span>
+              <span>Colour</span>
               <span>{COLORS.find((c) => c.hex === color)?.name}</span>
             </div>
             <div className="swatches">
@@ -822,14 +872,11 @@ export default function App() {
                 </button>
               ))}
             </div>
-            <div className="drawer-footnote">
-              <i />
-              36 pieces. Infinite possibilities.
-            </div>
           </div>
         </aside>
         <main className="stage">
           <Scene
+            theme={theme}
             parts={parts}
             selected={selected}
             ghosts={ghosts}
@@ -857,29 +904,8 @@ export default function App() {
             tool === "select" &&
             !selection.length && (
               <div className="welcome-note">
-                <div className="eyebrow">
-                  <span className="tiny-spark">✳</span> A LITTLE WORLD, BUILT
-                  TOGETHER
-                </div>
-                <h2>
-                  Make something
-                  <br />
-                  <em>wonderful.</em>
-                </h2>
-                <p>
-                  Pick a piece. Find its place.
-                  <br />
-                  Leave a little room for someone else's idea.
-                </p>
-                <button
-                  onClick={() => {
-                    beginBuild(BY_KEY["brick-2x4"]);
-                  }}
-                  className="text-link"
-                >
-                  Let’s build
-                  <ArrowUpRight size={15} />
-                </button>
+                <h2>Build together.</h2>
+                <p>Pick a part, then click to place it.</p>
                 <button
                   className="dismiss-welcome"
                   aria-label="Hide introduction"
@@ -890,7 +916,6 @@ export default function App() {
               </div>
             )}
           <div className="view-controls">
-            <div className="view-label">YOUR PERSPECTIVE</div>
             <div className="view-buttons">
               {["iso", "top", "front"].map((view) => (
                 <button
@@ -912,79 +937,17 @@ export default function App() {
           </div>
           {!presentation && selection.length > 0 && tool === "select" && (
             <div className="selection-card">
-              <div className="selection-heading">
-                <span className="eyebrow">ON YOUR WORKBENCH</span>
-                <button
-                  aria-label="Clear selection"
-                  onClick={() => setSelected([])}
-                >
-                  <X size={14} />
-                </button>
-              </div>
-              <h3>
+              <span>
                 {selection.length === 1
                   ? BY_KEY[selection[0].key]?.name
                   : `${selection.length} pieces selected`}
-              </h3>
-              <p>
-                {selection.length === 1
-                  ? "Drag onto a brick or connector to snap. Use arrows for precise moves."
-                  : "Drag a selected piece to move them together."}
-              </p>
-              <div className="selection-actions">
-                <button onClick={() => beginMove()} disabled={!canEdit}>
-                  <Move size={15} />
-                  Move
-                </button>
-                <button onClick={() => beginMove(true)} disabled={!canEdit}>
-                  <Copy size={15} />
-                  Copy
-                </button>
-                <button
-                  onClick={() => void remove()}
-                  disabled={!canEdit}
-                  aria-label="Delete selection"
-                >
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </div>
-          )}
-          {!presentation && (
-            <div className="layer-control">
-              <div className="layer-icon">
-                <Layers3 size={17} />
-              </div>
-              <div>
-                <span className="eyebrow">BUILD LAYER</span>
-                <div className="layer-row">
-                  <button
-                    title="Lower build layer"
-                    onClick={() => {
-                      setAutoHeight(false);
-                      setLayer((v) => Math.max(0, v - 1));
-                    }}
-                  >
-                    <Minus size={13} />
-                  </button>
-                  <button
-                    className="layer-value"
-                    onClick={() => setAutoHeight((v) => !v)}
-                    title="Toggle automatic height"
-                  >
-                    {autoHeight ? "Auto" : `${layer} plates`}
-                  </button>
-                  <button
-                    title="Raise build layer"
-                    onClick={() => {
-                      setAutoHeight(false);
-                      setLayer((v) => v + 1);
-                    }}
-                  >
-                    <Plus size={13} />
-                  </button>
-                </div>
-              </div>
+              </span>
+              <button
+                aria-label="Clear selection"
+                onClick={() => setSelected([])}
+              >
+                <X size={14} />
+              </button>
             </div>
           )}
           {!presentation && (
@@ -1007,7 +970,7 @@ export default function App() {
               ) : tool === "move" || tool === "duplicate" ? (
                 <>
                   <Move size={14} />
-                  Choose a new home for {selection.length}{" "}
+                  Place {selection.length}{" "}
                   {selection.length === 1 ? "piece" : "pieces"}
                   <kbd>esc</kbd> cancel
                 </>
@@ -1035,9 +998,7 @@ export default function App() {
                   label="Back to building"
                   onClick={() => setPresentation(false)}
                 />
-                <span className="presentation-label">
-                  A little world, built together
-                </span>
+                <span className="presentation-label">Neon Bricks</span>
               </>
             ) : (
               <>
@@ -1198,7 +1159,7 @@ export default function App() {
             ? state.world?.status !== "open"
               ? "Workshop closed"
               : state.pending.length
-                ? "Saving your idea…"
+                ? "Saving…"
                 : "Live & saved"
             : state.status === "error"
               ? "Connection unavailable"
@@ -1209,20 +1170,16 @@ export default function App() {
           {state.connections.length} connections
         </span>
         <div className="footer-spacer" />
-        <span className="footer-message">
-          A place for small pieces and big ideas.
-        </span>
+        <span className="footer-message">Build together in realtime</span>
         <a
           href="https://neon.com"
           target="_blank"
           rel="noreferrer"
           className="powered"
+          aria-label="Neon Realtime"
         >
-          Built together with
-          <span className="neon-word">
-            neon
-            <ArrowUpRight size={11} />
-          </span>
+          Neon Realtime
+          <ArrowUpRight size={11} />
         </a>
       </footer>
       {help && (
@@ -1241,8 +1198,8 @@ export default function App() {
             >
               <X size={18} />
             </button>
-            <span className="eyebrow">WELCOME TO YOUR LITTLE WORKSHOP</span>
-            <h2>Ideas click together.</h2>
+            <span className="eyebrow">NEON BRICKS</span>
+            <h2>Build together.</h2>
             <p>
               Choose a piece from the drawer and click the workbench to place
               it. Green means it fits. Your friends see it as soon as it’s
@@ -1297,7 +1254,7 @@ export default function App() {
               and motors are coming in a later phase.
             </p>
             <button className="primary-button" onClick={() => setHelp(false)}>
-              Make something wonderful
+              Start building
               <ArrowUpRight size={16} />
             </button>
           </section>
