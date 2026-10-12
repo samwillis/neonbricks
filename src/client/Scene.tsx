@@ -1,0 +1,477 @@
+import { useEffect, useMemo, useRef } from "react";
+import {
+  Canvas,
+  type ThreeEvent,
+  useThree,
+  useFrame,
+} from "@react-three/fiber";
+import { OrbitControls, ContactShadows, Edges, Html } from "@react-three/drei";
+import * as THREE from "three";
+import type { OrbitControls as OrbitImpl } from "three-stdlib";
+import { CATALOGUE, BY_KEY } from "../shared/catalogue";
+import type { Part, Preview, Viewer } from "../shared/types";
+import { dimensions } from "../shared/geometry";
+import { model } from "./shapes";
+export type FrameMetrics = {
+  p95: number;
+  fps: number;
+  calls: number;
+  triangles: number;
+  samples: number;
+};
+type Props = {
+  parts: Part[];
+  selected: string[];
+  ghosts: Preview[];
+  valid: boolean;
+  viewers: Viewer[];
+  guest: string;
+  generation: number;
+  grid: boolean;
+  quality: boolean;
+  cameraMode: string;
+  presentation: boolean;
+  onMetrics?: (m: FrameMetrics) => void;
+  onHover: (
+    point: THREE.Vector3,
+    normal: THREE.Vector3 | undefined,
+    part?: Part,
+  ) => void;
+  onClick: (p?: Part, shift?: boolean) => void;
+};
+const temp = new THREE.Object3D(),
+  color = new THREE.Color();
+function Instances({
+  partKey,
+  parts,
+  selected,
+  onHover,
+  onClick,
+}: {
+  partKey: string;
+  parts: Part[];
+  selected: string[];
+  onHover: Props["onHover"];
+  onClick: Props["onClick"];
+}) {
+  const def = BY_KEY[partKey],
+    g = useMemo(() => model(def), [def]);
+  const body = useRef<THREE.InstancedMesh>(null),
+    detail = useRef<THREE.InstancedMesh>(null);
+  const slots = useRef(new Map<string, number>()),
+    bySlot = useRef(new Map<number, Part>()),
+    signatures = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (!body.current) return;
+    const live = new Set(parts.map((p) => p.id));
+    for (const [id, i] of slots.current)
+      if (!live.has(id)) {
+        temp.position.set(0, -100, 0);
+        temp.scale.setScalar(0);
+        temp.updateMatrix();
+        body.current.setMatrixAt(i, temp.matrix);
+        detail.current?.setMatrixAt(i, temp.matrix);
+        slots.current.delete(id);
+        bySlot.current.delete(i);
+        signatures.current.delete(id);
+      }
+    for (const p of parts) {
+      let i = slots.current.get(p.id);
+      if (i === undefined) {
+        i = 0;
+        while (bySlot.current.has(i)) i++;
+        if (i >= 4096) continue;
+        slots.current.set(p.id, i);
+      }
+      bySlot.current.set(i, p);
+      const signature = `${p.revision}/${p.position.x}/${p.position.y}/${p.position.z}/${p.rotation}/${p.color}/${selected.includes(p.id)}`;
+      if (signatures.current.get(p.id) === signature) continue;
+      signatures.current.set(p.id, signature);
+      const d = BY_KEY[p.key],
+        a = (p.rotation * Math.PI) / 2;
+      temp.scale.setScalar(1);
+      temp.rotation.set(0, -a, 0);
+      temp.position.set(
+        p.position.x / 6 +
+          (p.rotation === 1 ? d.d : p.rotation === 2 ? d.w : 0),
+        p.position.y / 6,
+        p.position.z / 6 +
+          (p.rotation === 2 ? d.d : p.rotation === 3 ? d.w : 0),
+      );
+      temp.updateMatrix();
+      body.current.setMatrixAt(i, temp.matrix);
+      detail.current?.setMatrixAt(i, temp.matrix);
+      color.set(def.shape === "wheel" ? "#343b3a" : p.color);
+      if (selected.includes(p.id)) color.lerp(new THREE.Color("#fff9d8"), 0.35);
+      body.current.setColorAt(i, color);
+      detail.current?.setColorAt(
+        i,
+        new THREE.Color(
+          def.shape === "wheel" ? "#b4b9b0" : p.color,
+        ).multiplyScalar(0.85),
+      );
+    }
+    const count = Math.max(0, ...bySlot.current.keys()) + 1;
+    body.current.count = parts.length ? count : 0;
+    body.current.instanceMatrix.needsUpdate = true;
+    if (body.current.instanceColor)
+      body.current.instanceColor.needsUpdate = true;
+    body.current.computeBoundingSphere();
+    if (detail.current) {
+      detail.current.count = body.current.count;
+      detail.current.instanceMatrix.needsUpdate = true;
+      if (detail.current.instanceColor)
+        detail.current.instanceColor.needsUpdate = true;
+      detail.current.computeBoundingSphere();
+    }
+  }, [parts, selected, def]);
+  const hover = (e: ThreeEvent<PointerEvent>) => {
+    if (e.buttons) return;
+    e.stopPropagation();
+    const p = bySlot.current.get(e.instanceId ?? -1);
+    const n = e.face?.normal.clone();
+    if (n && p)
+      n.applyAxisAngle(new THREE.Vector3(0, 1, 0), (-p.rotation * Math.PI) / 2);
+    onHover(e.point, n, p);
+  };
+  const click = (e: ThreeEvent<MouseEvent>) => {
+    if (e.delta > 5) return;
+    e.stopPropagation();
+    onClick(bySlot.current.get(e.instanceId ?? -1), e.shiftKey);
+  };
+  return (
+    <group>
+      <instancedMesh
+        ref={body}
+        args={[g.body, undefined, 4096]}
+        castShadow
+        receiveShadow
+        onPointerMove={hover}
+        onClick={click}
+        dispose={null}
+      >
+        <meshStandardMaterial roughness={0.31} metalness={0.02} />
+      </instancedMesh>
+      {g.detail && (
+        <instancedMesh
+          ref={detail}
+          args={[g.detail, undefined, 4096]}
+          castShadow
+          receiveShadow
+          onPointerMove={hover}
+          onClick={click}
+          dispose={null}
+        >
+          <meshStandardMaterial roughness={0.4} metalness={0.16} />
+        </instancedMesh>
+      )}
+    </group>
+  );
+}
+function Piece({
+  part,
+  opacity = 1,
+  tint,
+}: {
+  part: Preview;
+  opacity?: number;
+  tint?: string;
+}) {
+  const d = BY_KEY[part.key];
+  if (!d) return null;
+  const g = model(d),
+    r = part.rotation;
+  return (
+    <group
+      position={[
+        part.position.x / 6 + (r === 1 ? d.d : r === 2 ? d.w : 0),
+        part.position.y / 6,
+        part.position.z / 6 + (r === 2 ? d.d : r === 3 ? d.w : 0),
+      ]}
+      rotation={[0, (-r * Math.PI) / 2, 0]}
+    >
+      <mesh geometry={g.body} dispose={null}>
+        <meshStandardMaterial
+          color={tint || part.color}
+          transparent
+          opacity={opacity}
+          roughness={0.3}
+          depthWrite={opacity === 1}
+        />
+      </mesh>
+      {g.detail && (
+        <mesh geometry={g.detail} dispose={null}>
+          <meshStandardMaterial
+            color={tint || part.color}
+            transparent
+            opacity={opacity}
+            roughness={0.5}
+            depthWrite={opacity === 1}
+          />
+        </mesh>
+      )}
+    </group>
+  );
+}
+function Camera({ mode }: { mode: string }) {
+  const { camera } = useThree(),
+    controls = useRef<OrbitImpl>(null);
+  useEffect(() => {
+    const poses: Record<string, number[]> = {
+      iso: [22, 22, 27],
+      top: [0, 34, 0.001],
+      front: [0, 11, 32],
+      side: [32, 11, 0],
+    };
+    const p = poses[mode.split(":")[0]] || poses.iso;
+    camera.position.set(p[0], p[1], p[2]);
+    controls.current?.target.set(0, 1, 0);
+    controls.current?.update();
+  }, [mode, camera]);
+  return (
+    <OrbitControls
+      ref={controls}
+      makeDefault
+      enableDamping
+      dampingFactor={0.12}
+      minDistance={5}
+      maxDistance={65}
+      maxPolarAngle={Math.PI / 2 - 0.015}
+      target={[0, 1, 0]}
+      mouseButtons={{
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN,
+      }}
+    />
+  );
+}
+function Contents(p: Props) {
+  const selected = p.parts.filter((part) => p.selected.includes(part.id));
+  const groups = useMemo(
+    () =>
+      Object.fromEntries(
+        CATALOGUE.map((d) => [d.key, p.parts.filter((p) => p.key === d.key)]),
+      ),
+    [p.parts],
+  );
+  return (
+    <>
+      {p.onMetrics && <FrameStats onMetrics={p.onMetrics} />}
+      <color attach="background" args={["#eae8e1"]} />
+      <fog attach="fog" args={["#eae8e1", 65, 120]} />
+      <ambientLight intensity={1.4} color="#fff5e8" />
+      <hemisphereLight args={["#f6f1e5", "#bbb7ad", 2]} />
+      <directionalLight
+        position={[-12, 24, 10]}
+        intensity={3.7}
+        color="#fff4df"
+        castShadow
+        shadow-mapSize={p.quality ? [1024, 1024] : [2048, 2048]}
+        shadow-camera-left={-22}
+        shadow-camera-right={22}
+        shadow-camera-top={22}
+        shadow-camera-bottom={-22}
+        shadow-normalBias={0.035}
+        shadow-bias={-0.0001}
+      />
+      <directionalLight
+        position={[10, 12, -8]}
+        intensity={1.2}
+        color="#dbe7ee"
+      />
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, -0.39, 0]}
+        receiveShadow
+      >
+        <planeGeometry args={[160, 160]} />
+        <meshStandardMaterial color="#e7e4dc" roughness={0.92} />
+      </mesh>
+      <mesh position={[0, -0.23, 0]} receiveShadow>
+        <boxGeometry args={[32.2, 0.34, 32.2]} />
+        <meshStandardMaterial color="#c9c9bb" roughness={0.75} />
+      </mesh>
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, -0.048, 0]}
+        receiveShadow
+        onPointerMove={(e) => {
+          if (!e.buttons) {
+            e.stopPropagation();
+            p.onHover(e.point, new THREE.Vector3(0, 1, 0));
+          }
+        }}
+        onClick={(e) => {
+          if (e.delta <= 5) {
+            e.stopPropagation();
+            p.onClick(undefined, e.shiftKey);
+          }
+        }}
+      >
+        <planeGeometry args={[32, 32]} />
+        <meshStandardMaterial color="#dddfd0" roughness={0.84} />
+      </mesh>
+      {p.grid && !p.presentation && (
+        <gridHelper
+          args={[32, 32, "#b5bdac", "#c7cdbd"]}
+          position={[0, -0.043, 0]}
+        />
+      )}
+      <Camera mode={p.cameraMode} />
+      {CATALOGUE.map((d) => (
+        <Instances
+          key={d.key}
+          partKey={d.key}
+          parts={groups[d.key]}
+          selected={p.selected}
+          onHover={p.onHover}
+          onClick={p.onClick}
+        />
+      ))}
+      {!p.presentation &&
+        selected.map((part) => {
+          const d = dimensions(part);
+          return (
+            <mesh
+              key={part.id}
+              position={[
+                (part.position.x + d.x / 2) / 6,
+                (part.position.y + d.y / 2) / 6,
+                (part.position.z + d.z / 2) / 6,
+              ]}
+            >
+              <boxGeometry
+                args={[d.x / 6 + 0.035, d.y / 6 + 0.035, d.z / 6 + 0.035]}
+              />
+              <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+              <Edges color="#279371" lineWidth={1.5} threshold={15} />
+            </mesh>
+          );
+        })}
+      {!p.presentation &&
+        p.ghosts.map((part, i) => (
+          <Piece
+            key={i}
+            part={part}
+            opacity={0.62}
+            tint={p.valid ? "#49ac87" : "#d36455"}
+          />
+        ))}
+      {!p.presentation &&
+        p.viewers
+          .filter((v) => v.id !== p.guest && v.generation === p.generation)
+          .map((v) => (
+            <group key={v.id}>
+              {v.preview && (
+                <Piece part={v.preview} opacity={0.3} tint={v.color} />
+              )}
+              {p.parts
+                .filter((part) => v.selection.includes(part.id))
+                .map((part) => {
+                  const d = dimensions(part);
+                  return (
+                    <mesh
+                      key={part.id}
+                      position={[
+                        (part.position.x + d.x / 2) / 6,
+                        (part.position.y + d.y / 2) / 6,
+                        (part.position.z + d.z / 2) / 6,
+                      ]}
+                    >
+                      <boxGeometry
+                        args={[d.x / 6 + 0.08, d.y / 6 + 0.08, d.z / 6 + 0.08]}
+                      />
+                      <meshBasicMaterial
+                        transparent
+                        opacity={0}
+                        depthWrite={false}
+                      />
+                      <Edges color={v.color} lineWidth={2} threshold={15} />
+                    </mesh>
+                  );
+                })}
+              <Html
+                position={
+                  v.preview
+                    ? [
+                        v.preview.position.x / 6,
+                        v.preview.position.y / 6 + 1.8,
+                        v.preview.position.z / 6,
+                      ]
+                    : [0, 0, 0]
+                }
+                center
+                style={{
+                  pointerEvents: "none",
+                  display: v.preview ? "block" : "none",
+                }}
+              >
+                <div className="remote-label">
+                  <i style={{ background: v.color }} />
+                  {v.name}
+                </div>
+              </Html>
+            </group>
+          ))}
+      {!p.quality && (
+        <ContactShadows
+          key={p.parts.map((p) => `${p.id}:${p.revision}`).join(",")}
+          position={[0, -0.039, 0]}
+          opacity={0.28}
+          scale={34}
+          blur={2.3}
+          far={8}
+          resolution={512}
+          frames={1}
+        />
+      )}
+    </>
+  );
+}
+function FrameStats({ onMetrics }: { onMetrics: (m: FrameMetrics) => void }) {
+  const { gl } = useThree(),
+    samples = useRef<number[]>([]),
+    started = useRef(performance.now()),
+    last = useRef(0);
+  useFrame((_, delta) => {
+    const now = performance.now();
+    if (document.visibilityState !== "visible") {
+      started.current = now;
+      samples.current = [];
+      return;
+    }
+    if (now - started.current < 2000) return;
+    samples.current.push(delta * 1000);
+    if (samples.current.length > 600) samples.current.shift();
+    if (now - last.current < 1000) return;
+    last.current = now;
+    const sorted = [...samples.current].sort((a, b) => a - b),
+      mean =
+        samples.current.reduce((a, b) => a + b, 0) / samples.current.length;
+    onMetrics({
+      p95: sorted[Math.floor(sorted.length * 0.95)] || 0,
+      fps: 1000 / mean,
+      calls: gl.info.render.calls,
+      triangles: gl.info.render.triangles,
+      samples: sorted.length,
+    });
+  });
+  return null;
+}
+export default function Scene(p: Props) {
+  return (
+    <Canvas
+      shadows
+      dpr={p.quality ? 1 : [1, 1.75]}
+      camera={{ position: [22, 22, 27], fov: 40, near: 0.1, far: 180 }}
+      gl={{
+        antialias: true,
+        toneMapping: THREE.ACESFilmicToneMapping,
+        toneMappingExposure: 1.1,
+      }}
+    >
+      <Contents {...p} />
+    </Canvas>
+  );
+}

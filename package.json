@@ -1,0 +1,66 @@
+{
+  "name": "neon-bricks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "node --env-file-if-exists=.env.local --import tsx --watch src/server/local.ts",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "npm run typecheck && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:db": "node --env-file=.env.local --import tsx scripts/test-db.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node --env-file=.env.local --import tsx scripts/migrate.ts",
+    "neon": "node scripts/neon.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "test:access": "node --env-file=.env.local --import tsx scripts/test-access.ts",
+    "test:capacity": "node --env-file=.env.local --import tsx scripts/test-capacity.ts",
+    "format": "prettier --write src scripts tests *.ts *.md",
+    "test:locks": "node --env-file=.env.local --import tsx scripts/test-locks.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "@neon/config": "file:.sdk/neon-config.tgz",
+    "@neon/functions": "file:.sdk/neon-functions.tgz",
+    "@neon/realtime": "file:.sdk/neon-realtime.tgz",
+    "@neon/sdk": "file:.sdk/neon-sdk.tgz",
+    "@react-three/drei": "^10.7.0",
+    "@react-three/fiber": "^9.3.0",
+    "drizzle-orm": "^0.45.3",
+    "hono": "^4.12.0",
+    "lucide-react": "^0.468.0",
+    "pg": "^8.16.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "three": "^0.180.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.15.5",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/three": "^0.180.0",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "drizzle-kit": "^0.31.0",
+    "prettier": "^3.9.9",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.4",
+    "vitest": "^5.0.3",
+    "ws": "^8.22.0"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "overrides": {
+    "shell-quote": "^1.12.0",
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.12"
+    }
+  }
+}
