@@ -83,7 +83,7 @@ function Thumb({ def, theme }: { def: Definition; theme: Theme }) {
 }
 function Logo() {
   return (
-    <svg className="brand" viewBox="0 0 190 36" aria-hidden="true">
+    <svg className="brand" viewBox="0 0 169 36" aria-hidden="true">
       <use className="brand-symbol" href="/brand/neonbricks.svg#brick" />
       <use href="/brand/neonbricks.svg#wordmark" />
     </svg>

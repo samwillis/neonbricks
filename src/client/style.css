@@ -134,7 +134,7 @@ input {
 }
 .brand {
   display: block;
-  width: 170px;
+  width: 151px;
   height: 32px;
   max-width: 100%;
 }
@@ -1113,7 +1113,7 @@ input:focus-visible {
     gap: 12px;
   }
   .brand {
-    width: 150px;
+    width: 134px;
     height: 28px;
   }
   .header-rule,
