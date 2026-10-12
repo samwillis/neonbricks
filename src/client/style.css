@@ -134,8 +134,8 @@ input {
 }
 .brand {
   display: block;
-  width: 190px;
-  height: 31px;
+  width: 170px;
+  height: 32px;
   max-width: 100%;
 }
 .brand-link {
@@ -614,14 +614,13 @@ input {
 .axis-z {
   color: var(--axis-z);
 }
-.stage-options {
+.inspector-control {
   position: absolute;
   right: 23px;
   bottom: 30px;
-  display: flex;
-  gap: 5px;
+  z-index: 15;
 }
-.stage-options button {
+.inspector-toggle {
   width: 30px;
   height: 30px;
   display: grid;
@@ -631,7 +630,7 @@ input {
   border-radius: 5px;
   background: var(--overlay);
 }
-.stage-options button.active {
+.inspector-toggle[aria-expanded="true"] {
   background: var(--overlay);
   border-color: var(--line);
   color: var(--green);
@@ -717,7 +716,7 @@ input {
   width: 100%;
   border-radius: 5px;
 }
-.popover > button svg:last-child {
+.popover > button svg ~ svg {
   margin-left: auto;
 }
 .popover > button:hover {
@@ -843,14 +842,33 @@ input {
 }
 .inspector {
   position: absolute;
-  bottom: 77px;
-  right: 22px;
+  bottom: 42px;
+  right: 0;
   width: 225px;
+  max-height: calc(100dvh - 190px);
+  overflow-y: auto;
   background: var(--overlay);
   border: 1px solid var(--line);
   padding: 17px;
   border-radius: 8px;
   z-index: 15;
+}
+.inspector-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.inspector-close {
+  display: grid;
+  place-items: center;
+  padding: 3px;
+  color: var(--muted);
+  border-radius: 3px;
+}
+.inspector-close:hover {
+  color: var(--ink);
+  background: var(--hover);
 }
 .inspector dl {
   display: grid;
@@ -971,15 +989,15 @@ input {
 .brand-symbol {
   color: var(--accent);
 }
-.theme-control {
+.display-control {
   position: relative;
 }
-.theme-popover {
+.display-popover {
   top: 44px;
   right: 0;
-  width: 170px;
+  width: 215px;
 }
-.theme-popover > button[aria-pressed="true"] {
+.display-popover > button[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--green);
 }
@@ -1008,8 +1026,7 @@ input:focus-visible {
 .view-controls,
 .selection-card,
 .build-hint,
-.tool-dock,
-.stage-options {
+.tool-dock {
   z-index: 10;
 }
 
@@ -1085,14 +1102,6 @@ input:focus-visible {
     right: 18px;
     top: 24px;
   }
-  .stage-options {
-    bottom: 92px;
-  }
-}
-@media (min-width: 721px) and (max-width: 900px) {
-  .stage-options {
-    bottom: 132px;
-  }
 }
 @media (max-width: 720px) {
   .drawer {
@@ -1104,8 +1113,8 @@ input:focus-visible {
     gap: 12px;
   }
   .brand {
-    width: 165px;
-    height: 27px;
+    width: 150px;
+    height: 28px;
   }
   .header-rule,
   .room-control {
@@ -1154,7 +1163,7 @@ input:focus-visible {
   .dock-divider {
     margin: 0 2px;
   }
-  .stage-options {
+  .inspector-control {
     bottom: 83px;
     right: 16px;
   }

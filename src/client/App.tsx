@@ -83,7 +83,7 @@ function Thumb({ def, theme }: { def: Definition; theme: Theme }) {
 }
 function Logo() {
   return (
-    <svg className="brand" viewBox="0 0 220 36" aria-hidden="true">
+    <svg className="brand" viewBox="0 0 190 36" aria-hidden="true">
       <use className="brand-symbol" href="/brand/neonbricks.svg#brick" />
       <use href="/brand/neonbricks.svg#wordmark" />
     </svg>
@@ -116,19 +116,21 @@ function ToolButton({
 }
 export default function App() {
   const { theme, preference, setPreference } = useTheme();
-  const [themeMenu, setThemeMenu] = useState(false);
-  const themeControl = useRef<HTMLDivElement>(null);
-  const themeButton = useRef<HTMLButtonElement>(null);
+  const [displayMenu, setDisplayMenu] = useState(false);
+  const displayControl = useRef<HTMLDivElement>(null);
+  const displayButton = useRef<HTMLButtonElement>(null);
+  const inspectorButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (!themeMenu) return;
+    if (!displayMenu) return;
     const closeOutside = (event: PointerEvent) => {
-      if (!themeControl.current?.contains(event.target as Node))
-        setThemeMenu(false);
+      if (!displayControl.current?.contains(event.target as Node))
+        setDisplayMenu(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setThemeMenu(false);
-        themeButton.current?.focus();
+        event.preventDefault();
+        setDisplayMenu(false);
+        displayButton.current?.focus();
       }
     };
     document.addEventListener("pointerdown", closeOutside);
@@ -137,7 +139,7 @@ export default function App() {
       document.removeEventListener("pointerdown", closeOutside);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [themeMenu]);
+  }, [displayMenu]);
   const state = useWorkshop(),
     [tool, setTool] = useState<Tool>("select"),
     [key, setKey] = useState("brick-2x4"),
@@ -419,6 +421,7 @@ export default function App() {
         a.cancel();
         if (!moving) setSelected([]);
         setHelp(false);
+        setInspector(false);
       } else if (e.key.toLowerCase() === "r" && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         void a.rotate();
@@ -668,30 +671,24 @@ export default function App() {
           {copied ? <Check size={16} /> : <Link2 size={16} />}
           <span>{copied ? "Link copied" : "Invite"}</span>
         </button>
-        <div className="theme-control" ref={themeControl}>
+        <div className="display-control" ref={displayControl}>
           <button
-            ref={themeButton}
-            className="icon-button theme-button"
-            aria-label="Appearance"
-            title={`Appearance: ${preference}`}
-            aria-expanded={themeMenu}
-            aria-controls="appearance-options"
-            onClick={() => setThemeMenu((v) => !v)}
+            ref={displayButton}
+            className="icon-button"
+            aria-label="Display"
+            title="Display"
+            aria-expanded={displayMenu}
+            aria-controls="display-options"
+            onClick={() => setDisplayMenu((v) => !v)}
           >
-            {preference === "system" ? (
-              <Monitor size={18} />
-            ) : theme === "dark" ? (
-              <Moon size={18} />
-            ) : (
-              <Sun size={18} />
-            )}
+            <SlidersHorizontal size={18} />
           </button>
-          {themeMenu && (
+          {displayMenu && (
             <div
-              id="appearance-options"
-              className="popover theme-popover"
+              id="display-options"
+              className="popover display-popover"
               role="group"
-              aria-label="Appearance options"
+              aria-label="Display options"
             >
               <div className="popover-heading">APPEARANCE</div>
               {(
@@ -704,17 +701,28 @@ export default function App() {
                 <button
                   key={value}
                   aria-pressed={preference === value}
-                  onClick={() => {
-                    setPreference(value);
-                    setThemeMenu(false);
-                    themeButton.current?.focus();
-                  }}
+                  onClick={() => setPreference(value)}
                 >
                   <Icon size={16} />
                   {label}
                   {preference === value && <Check size={14} />}
                 </button>
               ))}
+              <div className="menu-divider" />
+              <button aria-pressed={grid} onClick={() => setGrid((v) => !v)}>
+                <Grid3X3 size={16} />
+                Construction grid
+                {grid && <Check size={14} />}
+              </button>
+              <button
+                aria-pressed={!quality}
+                title="Soft shadows and sharper detail. Turn off to improve performance."
+                onClick={() => setQuality((v) => !v)}
+              >
+                <Sun size={16} />
+                Enhanced lighting
+                {!quality && <Check size={14} />}
+              </button>
             </div>
           )}
         </div>
@@ -1067,67 +1075,72 @@ export default function App() {
               </>
             )}
           </div>
-          <div className="stage-options">
+          <div className="inspector-control">
             <button
-              className={grid ? "active" : ""}
-              aria-label="Toggle construction grid"
-              title="Construction grid"
-              onClick={() => setGrid((v) => !v)}
-            >
-              <Grid3X3 size={16} />
-            </button>
-            <button
-              className={quality ? "active" : ""}
-              aria-label="Toggle reduced quality"
-              title="Reduced quality for smaller devices"
-              onClick={() => setQuality((v) => !v)}
-            >
-              <SlidersHorizontal size={16} />
-            </button>
-            <button
-              className={inspector ? "active" : ""}
+              ref={inspectorButton}
+              className="inspector-toggle"
               aria-label="Demo inspector"
               title="Demo inspector"
+              aria-expanded={inspector}
+              aria-controls="demo-inspector"
               onClick={() => setInspector((v) => !v)}
             >
               <PanelRight size={16} />
             </button>
+            {inspector && (
+              <section
+                className="inspector"
+                id="demo-inspector"
+                aria-label="Demo inspector"
+              >
+                <div className="inspector-heading">
+                  <span className="eyebrow">DEMO INSPECTOR</span>
+                  <button
+                    className="inspector-close"
+                    aria-label="Close inspector"
+                    onClick={() => {
+                      setInspector(false);
+                      inspectorButton.current?.focus();
+                    }}
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+                <dl>
+                  <dt>State</dt>
+                  <dd>Postgres</dd>
+                  <dt>Commands</dt>
+                  <dd>Neon Functions</dd>
+                  <dt>Updates</dt>
+                  <dd>Neon Realtime</dd>
+                  <dt>Generation</dt>
+                  <dd>{state.world?.generation}</dd>
+                  <dt>Connections</dt>
+                  <dd>{state.connections.length}</dd>
+                  <dt>Last transaction</dt>
+                  <dd className="txid">{state.lastTx || "—"}</dd>
+                  <dt>Pending</dt>
+                  <dd>{state.pending.length}</dd>
+                  {metrics && (
+                    <>
+                      <dt>Frame p95</dt>
+                      <dd data-testid="frame-p95">
+                        {metrics.p95.toFixed(1)} ms
+                      </dd>
+                      <dt>Frame rate</dt>
+                      <dd>{metrics.fps.toFixed(0)} fps</dd>
+                      <dt>Draw calls</dt>
+                      <dd>{metrics.calls}</dd>
+                      <dt>Triangles</dt>
+                      <dd>{metrics.triangles.toLocaleString()}</dd>
+                      <dt>Frame samples</dt>
+                      <dd>{metrics.samples}</dd>
+                    </>
+                  )}
+                </dl>
+              </section>
+            )}
           </div>
-          {inspector && (
-            <div className="inspector">
-              <div className="eyebrow">DEMO INSPECTOR</div>
-              <dl>
-                <dt>State</dt>
-                <dd>Postgres</dd>
-                <dt>Commands</dt>
-                <dd>Neon Functions</dd>
-                <dt>Updates</dt>
-                <dd>Neon Realtime</dd>
-                <dt>Generation</dt>
-                <dd>{state.world?.generation}</dd>
-                <dt>Connections</dt>
-                <dd>{state.connections.length}</dd>
-                <dt>Last transaction</dt>
-                <dd className="txid">{state.lastTx || "—"}</dd>
-                <dt>Pending</dt>
-                <dd>{state.pending.length}</dd>
-                {metrics && (
-                  <>
-                    <dt>Frame p95</dt>
-                    <dd data-testid="frame-p95">{metrics.p95.toFixed(1)} ms</dd>
-                    <dt>Frame rate</dt>
-                    <dd>{metrics.fps.toFixed(0)} fps</dd>
-                    <dt>Draw calls</dt>
-                    <dd>{metrics.calls}</dd>
-                    <dt>Triangles</dt>
-                    <dd>{metrics.triangles.toLocaleString()}</dd>
-                    <dt>Frame samples</dt>
-                    <dd>{metrics.samples}</dd>
-                  </>
-                )}
-              </dl>
-            </div>
-          )}
           {state.error && (
             <div className="toast" role="alert">
               <span>{state.error}</span>

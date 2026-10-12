@@ -1,6 +1,6 @@
 # Neon Bricks identity
 
-`neonbricks.svg` is a custom lowercase wordmark and outlined two-stud brick. The stylised brick sits to the left of the name. Its stacked edges reference Databricks; its open seam and green stroke reference Neon. The same symbol is used in the favicon.
+`neonbricks.svg` is a custom lowercase wordmark and abstract outlined brick. The symbol sits to the left of the smaller name. Three simple paths form its top, open lower outline, and one implied stud. Its stacked edges reference Databricks; its open seams and green stroke reference Neon. The same symbol is used in the favicon.
 
 The Databricks wordmark is custom lettering rather than a distributed font. The `bricks` glyphs use the geometry published in Neon's Databricks wordmark SVG, and the `neon` glyphs are drawn to match its stem widths, x-height, counters, and spacing. Reference: [neon.com](https://neon.com/), `/_next/static/immutable/media/databricks-logo-dark.147gukn5u85gi.svg`, inspected on 12 October 2026. This is the demo's own logo.
 
