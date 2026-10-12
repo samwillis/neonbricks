@@ -1,13 +1,15 @@
 import * as THREE from "three";
 import type { Part, Position } from "../shared/types";
 import { snapMovement, type MoveAxis } from "./movement";
+import type { DragSurface } from "./snapping";
 
 export type GestureProps = {
   selectMode: boolean;
   canMove: boolean;
   presentation: boolean;
+  selected: string[];
   onGrab: (part?: Part, shift?: boolean) => boolean;
-  onDrag: (delta: Position) => void;
+  onDrag: (delta: Position, hover?: DragSurface) => void;
   onDrop: () => void;
   onCancelDrag: () => void;
 };
@@ -34,6 +36,7 @@ export function installGestures(
     axis?: MoveAxis;
     plane: THREE.Plane;
     start: THREE.Vector3;
+    ids: string[];
   } | null = null;
   const ray = (e: PointerEvent) => {
     const rect = canvas.getBoundingClientRect();
@@ -95,6 +98,10 @@ export function installGestures(
       plane,
       start,
       dragging: false,
+      ids:
+        part && !props.selected.includes(part.id)
+          ? [part.id]
+          : [...props.selected],
     };
     if (orbit) orbit.enabled = false;
     canvas.setPointerCapture(e.pointerId);
@@ -113,7 +120,48 @@ export function installGestures(
     gesture.dragging = true;
     canvas.style.cursor = "grabbing";
     const delta = point.sub(gesture.start).multiplyScalar(6);
-    getProps().onDrag(snapMovement(delta, gesture.axis, e.altKey));
+    let hover: DragSurface | undefined;
+    if (!gesture.axis) {
+      const hit = raycaster.intersectObjects(scene.children, true).find((h) => {
+        const part = h.object.userData.partAt?.(h.instanceId ?? -1) as
+          Part | undefined;
+        return part && !gesture!.ids.includes(part.id);
+      });
+      const part = hit?.object.userData.partAt?.(hit.instanceId ?? -1) as
+        Part | undefined;
+      if (hit && part && hit.face) {
+        const matrix = hit.object.matrixWorld.clone();
+        if (
+          hit.object instanceof THREE.InstancedMesh &&
+          hit.instanceId !== undefined
+        ) {
+          const instance = new THREE.Matrix4();
+          hit.object.getMatrixAt(hit.instanceId, instance);
+          matrix.multiply(instance);
+        }
+        const normal = hit.face.normal
+          .clone()
+          .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(matrix));
+        const surfaceDelta = hit.point
+          .clone()
+          .sub(gesture.start)
+          .multiplyScalar(6);
+        hover = {
+          surface: {
+            part,
+            point: {
+              x: hit.point.x * 6,
+              y: hit.point.y * 6,
+              z: hit.point.z * 6,
+            },
+            normal: { x: normal.x, y: normal.y, z: normal.z },
+          },
+          delta: { x: surfaceDelta.x, y: surfaceDelta.y, z: surfaceDelta.z },
+          fine: e.altKey,
+        };
+      }
+    }
+    getProps().onDrag(snapMovement(delta, gesture.axis, e.altKey), hover);
   };
   const up = (e: PointerEvent) => {
     if (gesture?.id !== e.pointerId) return;

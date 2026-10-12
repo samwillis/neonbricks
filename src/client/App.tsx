@@ -40,13 +40,7 @@ import {
   COLORS,
   type Definition,
 } from "../shared/catalogue";
-import {
-  collision,
-  validPart,
-  bounds,
-  connectorList,
-  mating,
-} from "../shared/geometry";
+import { bounds } from "../shared/geometry";
 import type { Part, Preview, Position } from "../shared/types";
 import {
   useWorkshop,
@@ -72,8 +66,10 @@ import {
   fitsScene,
   movedParts,
   moveRequest,
+  snapMovement,
   type MoveSnapshot,
 } from "./movement";
+import { snapToSurface, type DragSurface } from "./snapping";
 type Tool = "select" | "build" | "move" | "duplicate";
 function Thumb({ def }: { def: Definition }) {
   const [src, setSrc] = useState("");
@@ -281,8 +277,19 @@ export default function App() {
     notice(null);
     return true;
   }
-  function dragTo(delta: Position) {
+  function dragTo(delta: Position, hover?: DragSurface) {
     if (!pickup.current) return;
+    if (hover) {
+      const preferred = snapMovement(hover.delta, undefined, hover.fine);
+      preferred.y = Math.round(hover.delta.y / 2) * 2;
+      delta = snapToSurface(
+        pickup.current.parts,
+        hover.surface,
+        preferred,
+        getState().parts,
+        { excluded: pickup.current.parts.map((p) => p.id), fine: hover.fine },
+      ).delta;
+    }
     const previous = dragRef.current?.delta;
     if (
       previous &&
@@ -428,61 +435,40 @@ export default function App() {
         : layer * 2,
       z: Math.floor((point.z * 6 + 0.001) / step) * step,
     };
-    if (part && normal && Math.abs(normal.y) < 0.5) {
-      const b = bounds(part);
-      if (normal.x > 0.5) next.x = b.maxx;
-      if (normal.x < -0.5) next.x = b.minx - (BY_KEY[key]?.w || 1) * 6;
-      if (normal.z > 0.5) next.z = b.maxz;
-      if (normal.z < -0.5) next.z = b.minz - (BY_KEY[key]?.d || 1) * 6;
-    }
-    let r = rotation;
-    if (tool === "build" && part) {
-      const def = BY_KEY[key];
-      if (def.category === "Mechanics") {
-        const targets = connectorList(part).filter(
-          (c) => !["stud", "socket"].includes(c.type),
-        );
-        const fits: { position: Position; rotation: number; score: number }[] =
-          [];
-        for (let rot = 0; rot < 4; rot++) {
-          const origin: Part = {
-            id: "preview",
-            key,
-            color,
-            position: { x: 0, y: 0, z: 0 },
-            rotation: rot,
-            revision: 0,
-          };
-          for (const local of connectorList(origin))
-            for (const target of targets) {
-              if (!mating({ ...local, at: target.at }, target)) continue;
-              const position = {
-                  x: target.at.x - local.at.x,
-                  y: target.at.y - local.at.y,
-                  z: target.at.z - local.at.z,
-                },
-                candidate = { ...origin, position };
-              if (!validPart(candidate) || collision(candidate, part)) continue;
-              fits.push({
-                position,
-                rotation: rot,
-                score:
-                  new THREE.Vector3(
-                    target.at.x / 6,
-                    target.at.y / 6,
-                    target.at.z / 6,
-                  ).distanceToSquared(point) + (rot === rotation ? 0 : 0.001),
-              });
-            }
-        }
-        const fit = fits.sort((a, b) => a.score - b.score)[0];
-        if (fit) {
-          Object.assign(next, fit.position);
-          r = fit.rotation;
-        }
-      }
-    }
-    if (r !== rotation) setRotation(r);
+    const source: Part = {
+      id: "preview",
+      key,
+      color,
+      position: { x: 0, y: 0, z: 0 },
+      rotation,
+      revision: 0,
+    };
+    const moving = tool === "build" ? [source] : selection;
+    if (!moving.length || (tool !== "build" && !base)) return;
+    const origin = tool === "build" ? { x: 0, y: 0, z: 0 } : base!;
+    const snapped = snapToSurface(
+      moving,
+      {
+        part,
+        point: { x: point.x * 6, y: point.y * 6, z: point.z * 6 },
+        normal: normal || { x: 0, y: 1, z: 0 },
+      },
+      { x: next.x - origin.x, y: next.y - origin.y, z: next.z - origin.z },
+      state.parts,
+      {
+        excluded: tool === "move" ? selected : [],
+        autoHeight,
+        fine: held.current,
+        rotate: tool === "build",
+      },
+    );
+    Object.assign(next, {
+      x: origin.x + snapped.delta.x,
+      y: origin.y + snapped.delta.y,
+      z: origin.z + snapped.delta.z,
+    });
+    if (tool === "build" && snapped.parts[0].rotation !== rotation)
+      setRotation(snapped.parts[0].rotation);
     setPose((p) =>
       p && p.x === next.x && p.y === next.y && p.z === next.z ? p : next,
     );
@@ -942,7 +928,7 @@ export default function App() {
               </h3>
               <p>
                 {selection.length === 1
-                  ? "Drag to move. Use the arrows to adjust height or one axis."
+                  ? "Drag onto a brick or connector to snap. Use arrows for precise moves."
                   : "Drag a selected piece to move them together."}
               </p>
               <div className="selection-actions">
@@ -1266,8 +1252,9 @@ export default function App() {
               <div>
                 <kbd>drag</kbd>
                 <span>
-                  Move a piece at its current height. Drag the background to
-                  orbit. Right-drag to pan, scroll to zoom.
+                  Drag a piece onto a brick or compatible connector to snap.
+                  Drag the background to orbit. Right-drag to pan, scroll to
+                  zoom.
                 </span>
               </div>
               <div>

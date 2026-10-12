@@ -14,6 +14,7 @@ import { dimensions, bounds as boundsForHandles } from "../shared/geometry";
 import { model } from "./shapes";
 import type { Position } from "../shared/types";
 import { installGestures } from "./gestures";
+import type { DragSurface } from "./snapping";
 export type FrameMetrics = {
   p95: number;
   fps: number;
@@ -37,7 +38,7 @@ type Props = {
   canMove: boolean;
   dragging: boolean;
   onGrab: (part?: Part, shift?: boolean) => boolean;
-  onDrag: (delta: Position) => void;
+  onDrag: (delta: Position, hover?: DragSurface) => void;
   onDrop: () => void;
   onCancelDrag: () => void;
   onMetrics?: (m: FrameMetrics) => void;

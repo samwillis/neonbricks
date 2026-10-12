@@ -50,6 +50,7 @@ function setup() {
     selectMode: true,
     canMove: true,
     presentation: false,
+    selected: ["brick"],
     onGrab: vi.fn(() => true),
     onDrag: vi.fn((delta) => {
       preview = delta;
@@ -70,10 +71,52 @@ function setup() {
     () => props,
     keys as unknown as Window,
   );
-  return { canvas, keys, orbit, props, commits, gestures };
+  return { canvas, keys, orbit, props, commits, gestures, scene, camera, mesh };
 }
 
 describe("pointer gesture lifecycle", () => {
+  it("reports the target under a held drag with its instance-transformed normal", () => {
+    const s = setup();
+    const target = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.MeshBasicMaterial(),
+      1,
+    );
+    const transform = new THREE.Matrix4().makeRotationY(-Math.PI / 2);
+    transform.setPosition(3, 0, 0);
+    target.setMatrixAt(0, transform);
+    target.userData.partAt = () => ({ id: "target" });
+    s.scene.add(target);
+    s.scene.updateMatrixWorld();
+    const screen = new THREE.Vector3(3, 0, 0).project(s.camera);
+    s.canvas.dispatchEvent(event("pointerdown"));
+    s.canvas.dispatchEvent(
+      event("pointermove", {
+        clientX: (screen.x + 1) * 50,
+        clientY: (1 - screen.y) * 50,
+      }),
+    );
+    const hover = vi.mocked(s.props.onDrag).mock.calls.at(-1)?.[1];
+    expect(hover?.surface.part?.id).toBe("target");
+    expect(hover?.surface.normal.x).toBeCloseTo(-1);
+    expect(hover?.surface.normal.z).toBeCloseTo(0);
+    expect(hover?.surface.point.x).toBeCloseTo(18);
+    s.gestures.dispose();
+  });
+
+  it("keeps axis drags constrained without surface attachment snapping", () => {
+    const s = setup();
+    s.mesh.userData.moveAxis = "x";
+    s.canvas.dispatchEvent(event("pointerdown"));
+    s.canvas.dispatchEvent(event("pointermove", { clientX: 80, clientY: 70 }));
+    const [delta, hover] = vi.mocked(s.props.onDrag).mock.calls.at(-1)!;
+    expect(delta.x).not.toBe(0);
+    expect(delta.y).toBe(0);
+    expect(delta.z).toBe(0);
+    expect(hover).toBeUndefined();
+    s.gestures.dispose();
+  });
+
   it("selects without moving on a click or small pointer jitter", () => {
     const s = setup();
     s.canvas.dispatchEvent(event("pointerdown"));
