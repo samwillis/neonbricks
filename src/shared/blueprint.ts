@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { CATALOGUE, COLORS } from "./catalogue";
 import { bounds, connectorList, mask, mating, validPart } from "./geometry";
-import { CATALOGUE_VERSION, type Part } from "./types";
+import { CATALOGUE_VERSION, MAX_AI_PARTS, type Part } from "./types";
+import { expandDesign } from "./design";
 
-export const MAX_AI_PARTS = 100;
+export { MAX_AI_PARTS } from "./types";
 export const blueprintSchema = z.object({
   version: z.literal(1),
   catalogue: z.literal(CATALOGUE_VERSION),
@@ -53,7 +54,14 @@ export type CompiledBlueprint = {
 // Both the preview and server use this compiler. Attachment coordinates come
 // from the catalogue's actual connectors, rather than model arithmetic.
 export function compileBlueprint(input: unknown): CompiledBlueprint {
-  const blueprint = blueprintSchema.parse(input);
+  const blueprint = blueprintSchema.parse(
+    input &&
+      typeof input === "object" &&
+      "version" in input &&
+      input.version === 2
+      ? expandDesign(input)
+      : input,
+  );
   const issues: BlueprintIssue[] = [];
   const issue = (code: string, parts: string[], message: string) => {
     if (issues.length < 30) issues.push({ code, parts, message });
@@ -150,8 +158,9 @@ export function compileBlueprint(input: unknown): CompiledBlueprint {
 
   const occupied = new Map<string, string>();
   const clashes = new Set<string>();
+  const cells = new Map(parts.map((p) => [p.id, mask(p)]));
   for (const p of parts)
-    for (const cell of mask(p)) {
+    for (const cell of cells.get(p.id)!) {
       const k = `${cell.x},${cell.y},${cell.z}`,
         other = occupied.get(k);
       if (other) {
@@ -214,9 +223,28 @@ export function compileBlueprint(input: unknown): CompiledBlueprint {
   const grounded = new Set(
     parts.filter((p) => bounds(p).miny === 0).map((p) => p.id),
   );
+  // Mechanical mounts have no stud sockets. A part can also rest on a real
+  // upward surface. These directed support edges are quality evidence only;
+  // they never become invented connector records in the database.
+  const supportedBy = new Map(parts.map((p) => [p.id, new Set<string>()]));
+  for (const p of parts) {
+    const contacts = new Map<string, number>();
+    const bottom = bounds(p).miny;
+    for (const cell of cells.get(p.id)!) {
+      if (cell.y !== bottom) continue;
+      const below = occupied.get(`${cell.x},${cell.y - 1},${cell.z}`);
+      if (below && below !== p.id)
+        contacts.set(below, (contacts.get(below) || 0) + 1);
+    }
+    for (const [lower, area] of contacts)
+      if (area >= 9) supportedBy.get(lower)!.add(p.id);
+  }
   const queue = [...grounded];
   for (let i = 0; i < queue.length; i++)
-    for (const neighbour of graph.get(queue[i])!)
+    for (const neighbour of [
+      ...graph.get(queue[i])!,
+      ...supportedBy.get(queue[i])!,
+    ])
       if (!grounded.has(neighbour)) {
         grounded.add(neighbour);
         queue.push(neighbour);
@@ -226,7 +254,7 @@ export function compileBlueprint(input: unknown): CompiledBlueprint {
       issue(
         "unattached",
         [p.id],
-        "Part has no connector path to a part on the board. Attach it to the build or place it on the board.",
+        "Part has no supported path to the board. Connect it, rest its bottom on a supported surface, or place it on the board.",
       );
   return { blueprint, parts, edges, issues };
 }

@@ -197,6 +197,11 @@ textarea {
   text-decoration: underline;
   text-underline-offset: 4px;
 }
+.ai-start-over {
+  margin-top: 15px;
+  color: var(--quiet);
+  font-size: 11px;
+}
 .ai-footnote {
   font-size: 11px;
   color: var(--quiet);

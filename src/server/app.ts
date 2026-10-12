@@ -20,6 +20,8 @@ import { validPart, collision } from "../shared/geometry";
 import { WORLD_LIMIT, HEIGHT_LIMIT, UNIT } from "../shared/types";
 import {
   aiAvailable,
+  aiConfiguration,
+  AI_BUILDER_VERSION,
   createGeneration,
   getGeneration,
   runGeneration,
@@ -34,6 +36,7 @@ const origins = (
 ).split(",");
 const app = new Hono<{ Variables: { identity: Identity } }>();
 app.use("*", async (c, next) => {
+  c.header("Cache-Control", "no-store");
   const started = performance.now();
   await next();
   c.header(
@@ -57,6 +60,7 @@ app.get("/api/health", (c) =>
     backend: "Neon Functions",
     realtime: !!process.env.REALTIME_SECRET,
     ai: aiAvailable(),
+    aiBuilder: AI_BUILDER_VERSION,
   }),
 );
 const position = z.object({
@@ -179,12 +183,14 @@ app.post("/api/worlds", async (c) => {
     201,
   );
 });
-app.get("/api/ai/config", (c) =>
-  c.json({ available: aiAvailable(), maxParts: 100 }),
-);
+app.get("/api/ai/config", (c) => c.json(aiConfiguration()));
 app.post("/api/ai/generations", async (c) => {
   const input = z
-    .object({ id: z.uuid(), prompt: z.string().trim().min(3).max(1200) })
+    .object({
+      id: z.uuid(),
+      prompt: z.string().trim().min(3).max(1200),
+      source: z.uuid().optional(),
+    })
     .parse(await c.req.json());
   return c.json(await createGeneration(c.get("identity"), input), 201);
 });

@@ -1,4 +1,5 @@
 export type Position = { x: number; y: number; z: number };
+export const MAX_AI_PARTS = 240;
 export type AIGenerationStatus =
   | "queued"
   | "designing"
@@ -14,6 +15,7 @@ export type AIGenerationProgress = {
   attempt: number;
   error: string | null;
   world: string | null;
+  updated_at?: string;
 };
 export type AIGeneration = AIGenerationProgress & {
   prompt: string;

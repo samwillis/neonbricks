@@ -5,6 +5,7 @@ import "./node-websocket";
 import { createRealtimeClient } from "@neon/realtime/client";
 import { pool } from "../src/server/db";
 import { compileBlueprint } from "../src/shared/blueprint";
+import { recordGenerationAttempt } from "../src/server/ai";
 import type { AIGenerationProgress, AIGeneration } from "../src/shared/types";
 const base = (process.env.TEST_API_URL || process.env.VITE_API_URL!).replace(
   /\/$/,
@@ -78,6 +79,13 @@ try {
   assert.equal((await ok(a.token, "/ai/config")).available, true);
   if (!process.argv.includes("--generate-only")) {
     const create = async () => {
+      // Retain the source fixture until snapshot/acceptance checks finish, but
+      // release completed synthetic probes before reserving the next one.
+      if (records.length > 1)
+        await pool.query(
+          "DELETE FROM ai_generations WHERE id=ANY($1::uuid[]) AND status IN ('ready','accepted','cancelled','failed')",
+          [records.slice(1)],
+        );
       const id = randomUUID();
       records.push(id);
       return ok(a.token, "/ai/generations", {
@@ -124,9 +132,29 @@ try {
       429,
     );
     await pool.query(
-      "UPDATE ai_generations SET status='checking',attempt=1 WHERE id=$1",
+      "UPDATE ai_generations SET status='designing' WHERE id=$1",
       [job.id],
     );
+    assert.equal(await recordGenerationAttempt(job.id, 1, "checking"), true);
+    assert.equal(
+      await recordGenerationAttempt(job.id, 1, "checking", {
+        blueprint: fixture,
+        inputTokens: 11,
+        outputTokens: 22,
+        elapsedMs: 123,
+        issues: [],
+      }),
+      true,
+    );
+    const recorded = (
+      await pool.query(
+        "SELECT input_tokens,output_tokens,attempts FROM ai_generations WHERE id=$1",
+        [job.id],
+      )
+    ).rows[0];
+    assert.equal(recorded.input_tokens, 11);
+    assert.equal(recorded.output_tokens, 22);
+    assert.deepEqual(recorded.attempts["1"].blueprint, fixture);
     await sub.awaitRows(
       (rows) => rows.some((r) => r.status === "checking"),
       20000,
@@ -145,6 +173,46 @@ try {
       ),
     );
     assert.equal(new Set(accepted.map((w) => w.slug)).size, 1);
+    const revisionId = randomUUID();
+    records.push(revisionId);
+    const revision = {
+      id: revisionId,
+      prompt: "Make the roof blue",
+      source: job.id,
+    };
+    await ok(a.token, "/ai/generations", revision);
+    const snapshot = (
+      await pool.query(
+        "SELECT source,reference FROM ai_generations WHERE id=$1",
+        [revisionId],
+      )
+    ).rows[0];
+    assert.equal(snapshot.source, job.id);
+    assert.deepEqual(snapshot.reference, fixture);
+    assert.equal(
+      (await ok(a.token, "/ai/generations", revision)).id,
+      revisionId,
+    );
+    assert.equal(
+      (
+        await request(a.token, "/ai/generations", {
+          ...revision,
+          source: randomUUID(),
+        })
+      ).status,
+      409,
+    );
+    assert.equal(
+      (
+        await request(b.token, "/ai/generations", {
+          id: randomUUID(),
+          prompt: "Copy the private draft",
+          source: job.id,
+        })
+      ).status,
+      404,
+    );
+    await ok(a.token, `/ai/generations/${revisionId}/cancel`, {});
     const joined = await ok(a.token, `/worlds/${accepted[0].slug}/join`, {});
     worlds.push(joined.world.id);
     fixtureWorld = joined.world.id;
@@ -196,6 +264,14 @@ try {
       (await ok(a.token, `/ai/generations/${cancelled.id}/run`, {})).status,
       "cancelled",
     );
+    assert.equal(
+      await recordGenerationAttempt(cancelled.id, 1, "checking", {
+        blueprint: fixture,
+        inputTokens: 99,
+        outputTokens: 99,
+      }),
+      false,
+    );
     const invalid = await create();
     await pool.query(
       "UPDATE ai_generations SET status='ready',blueprint=$2::jsonb WHERE id=$1",
@@ -238,7 +314,6 @@ try {
     process.argv.includes("--generate-only")
   ) {
     const id = randomUUID();
-    records.push(id);
     const prompt =
       process.env.AI_TEST_PROMPT ||
       "A cosy little cabin with a red roof, an open doorway, a chimney and a pine tree beside it. Use around 40–60 pieces.";
@@ -301,6 +376,12 @@ try {
   if (fixtureWorld)
     await pool.query("UPDATE worlds SET status='closed' WHERE id=$1", [
       fixtureWorld,
+    ]);
+  // Remove only the synthetic jobs created by the no-inference fixture suite.
+  // Paid generations and their previews stay available for review/refinement.
+  if (records.length)
+    await pool.query("DELETE FROM ai_generations WHERE id=ANY($1::uuid[])", [
+      records,
     ]);
   await pool.end();
 }

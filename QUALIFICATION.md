@@ -1,6 +1,6 @@
 # Implementation and qualification
 
-Recorded 12 October 2026. This is the built staging demo; public frontend release is still a separate deployment step.
+Recorded 12–13 October 2026. This is the built staging demo; public frontend release is still a separate deployment step.
 
 ## Foundation decisions
 
@@ -94,6 +94,37 @@ Each result passed the shared collision, bounds, connector-claim and grounding c
 The production-build browser check used an isolated workshop and preserved the user's existing build. It verified closing and reopening during generation, restoring the ready preview after reload, explicit acceptance, automatic camera framing, selection, recolouring and undo on generated pieces. The prompt dialog was inspected in light and dark modes and at a 390-pixel viewport without page overflow; Escape dismisses it and the textarea receives initial focus. Original display preferences and viewport were restored. Late responses from an older job cannot replace a newer draft, and a long inference request is excluded from presence-clock estimation.
 
 Raw results are saved under ignored `artifacts/ai-cabin-gpt-medium.json`, `artifacts/ai-lighthouse.json` and `artifacts/ai-rover-gpt-medium.json`. The preview is `artifacts/ai-preview.png`, and the accepted lighthouse is `artifacts/ai-lighthouse-workshop.png`. Functions use a bounded HTTP invocation with a lease, not a durable job queue; eviction can require retry. These AI checks do not change the public-capacity release gate.
+
+## AI builder iteration — 13 October
+
+Inference now produces compact repeated rows and verified assemblies, expanded into normal version 1 pieces. The limit is 240 expanded pieces. Architectural assemblies include a correctly pitched roof and a tapered pine; mechanical assemblies include fitted wheel/axle/bearing units. Directed surface-support checks permit decks to rest on bearing tops without inventing connector records. Geometry validation still rejects occupied-cell overlaps, bounds violations and conflicting connector claims.
+
+Repairs use row patches rather than whole-model rewrites. Ready drafts can be refined with a follow-up prompt; unaffected rows are preserved. Reservation captures an owned immutable draft snapshot. The prior validated preview remains visible during an update and after failure or cancellation. HTTP/live response-order guards prevent stale stages from undoing cancellation or replacing a newer preview.
+
+A fixed benchmark uses the normal deployed reservation/run/accept path with fresh guests, at most two simultaneous requests, and no automatic retries. Times cover reservation through the run response, excluding acceptance. The first format comparison used GPT 5.4 with low reasoning and whole-design repair:
+
+| Case     | Result | Pieces | Calls | Ready time | Output tokens |
+| -------- | ------ | -----: | ----: | ---------: | ------------: |
+| Cabin    | Passed |     55 |     3 |     96.0 s |        11,327 |
+| Rover    | Passed |     37 |     2 |     51.5 s |         6,319 |
+| Castle   | Passed |     51 |     2 |     62.5 s |         8,019 |
+| Dinosaur | Passed |     25 |     3 |     62.5 s |         7,506 |
+
+The old-format baseline castle took 89.1 seconds and dinosaur 99.8 seconds. These are single samples, not a controlled latency distribution. Visual inspection of the compact cabin found a valley roof and a block-shaped tree despite geometric acceptance. That led to the verified architectural assemblies and more explicit opening/roof instructions.
+
+Sonnet 4.6 was faster per call but failed both cabin and castle after three attempts (55.0 and 74.3 seconds) on overlaps and support errors. Two subsequent reservations intended to test GPT still selected Sonnet during a mixed-version rollout and also failed. GPT remains the default. The benchmark now verifies source version and model configuration before reserving work. Earlier no-inference failures exposed a Postgres parameter-type ambiguity in progress recording; explicit integer casts fixed it, and the integration suite exercises the real SQL recording path.
+
+All 82 unit tests pass. The deployed no-inference lifecycle suite passed after the SQL fix and response-order changes, including Realtime stages, source ownership/snapshotting, attempt recording, exact usage increments, cancellation rejecting late progress, acceptance and normal editing. One overlapping fixture run was rejected by the intended two-build global cap; it was rerun successfully while idle. Synthetic fixture jobs are cleaned during/following the test; paid generation records remain unchanged. Existing paid reservation timestamps and limits were not reset for testing.
+
+The subsequent GPT cabin passed in 37.3 seconds with 47 pieces and two calls (4,042 output tokens). Its roof was correctly pitched and the tree tapered, but its doorway faced away from the default camera. The same run's held-out windmill failed after three calls (79.3 seconds), with unsupported/colliding blades. A rover trial also failed after three calls, ending with a three-piece antenna one stud outside its support.
+
+These observations produced three further changes: explicit front metadata with whole-model presentation rotation; a complete four-wheel chassis and a supported vertical cross for static blades; and a bounded small-placement snap pass. The real failed rover is kept as a credential-free unit fixture. The snap regression passes through all four declared front directions, preserves the rest of the rover and rejects large gaps, overlaps and partially anchored repeats. All seven verified assemblies pass collision, support and extent checks through four yaws. A roof occupancy regression verifies a ridge rather than a valley.
+
+On builder `design-v2-patches-3`, the same rover prompt passed through the production UI in 49.4 seconds, with 31 pieces, three calls and 6,026 output tokens. The preview shows four fitted wheels, a readable cockpit, headlights and antenna. This candidate needed model repairs but no automatic snaps. The UI verified an update rejected by the daily budget keeps the 31-piece preview available, and closing/reloading restores that preview even when the newer reservation has no server record. The original user workshop was preserved.
+
+All 86 unit tests and the production build pass. The updated windmill assembly, new-generation doorway orientation and successful paid refinement still need further live qualification; their deterministic geometry/patch tests pass. The staging 40-request allowance has been reached. Automatic approval review rejected raising it to 50 without additional user approval; the existing limit was retained and the additional testing request is pending.
+
+Current results remain small samples. Raw comparisons are under ignored `artifacts/ai-benchmark-baseline`, `artifacts/ai-benchmark-compact-low`, `artifacts/ai-benchmark-sonnet-v2`, `artifacts/ai-benchmark-gpt-v2` (actually Sonnet during rollout), and `artifacts/ai-benchmark-gpt-final`. The successful v3 rover diagnostics are `artifacts/ai-rover-v3.json`; its preview is `artifacts/ai-rover-v3-preview.png`. These checks improve the demonstrated examples but do not establish a general success rate, public launch readiness or a cost/latency promise.
 
 ## Remaining public-release work
 

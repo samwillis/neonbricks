@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   blueprintSchema,
   compileBlueprint,
+  MAX_AI_PARTS,
   type Blueprint,
 } from "../src/shared/blueprint";
 import { CATALOGUE_VERSION } from "../src/shared/types";
@@ -137,7 +138,7 @@ describe("AI blueprint compiler", () => {
     expect(
       blueprintSchema.safeParse(
         blueprint(
-          Array.from({ length: 101 }, (_, i) =>
+          Array.from({ length: MAX_AI_PARTS + 1 }, (_, i) =>
             part(`p${i}`, "brick-1x1", [0, 0, 0]),
           ),
         ),

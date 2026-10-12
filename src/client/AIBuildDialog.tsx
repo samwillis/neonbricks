@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, Blocks, LoaderCircle, X } from "lucide-react";
-import type { AIGeneration } from "../shared/types";
+import type { AIGeneration, AIGenerationProgress } from "../shared/types";
+import { newerGeneration } from "./ai-progress";
 import { api, watchGeneration } from "./store";
 import Scene from "./Scene";
 import type { Theme } from "./theme";
 
 const savedJob = "neon-bricks-ai-job";
+const savedPreview = "neon-bricks-ai-preview";
 const busyStates = ["queued", "designing", "checking", "repairing"];
 const stages: Record<string, string> = {
   queued: "Getting ready…",
@@ -28,6 +30,8 @@ export default function AIBuildDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   const [prompt, setPrompt] = useState("");
   const [job, setJob] = useState<AIGeneration | null>(null);
+  const [preview, setPreview] = useState<AIGeneration | null>(null);
+  const previewId = useRef<string | null>(null);
   const [error, setError] = useState("");
   const [available, setAvailable] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -35,11 +39,43 @@ export default function AIBuildDialog({
   const [accepting, setAccepting] = useState(false);
   const mounted = useRef(true);
   const currentJob = useRef<string | null>(null);
+  const latestJob = useRef<AIGeneration | null>(null);
   const busy = !!job && busyStates.includes(job.status);
-  const ready =
-    !!job && ["ready", "accepted"].includes(job.status) && job.parts.length > 0;
+  const ready = !!preview;
+  function receivePreview(row: AIGeneration, clearPrompt = true) {
+    if (
+      !mounted.current ||
+      !["ready", "accepted"].includes(row.status) ||
+      !row.parts.length
+    )
+      return;
+    if (previewId.current !== row.id && clearPrompt) setPrompt("");
+    previewId.current = row.id;
+    setPreview(row);
+    sessionStorage.setItem(savedPreview, row.id);
+  }
   function receiveJob(row: AIGeneration) {
-    if (mounted.current && currentJob.current === row.id) setJob(row);
+    if (
+      mounted.current &&
+      currentJob.current === row.id &&
+      newerGeneration(latestJob.current, row)
+    ) {
+      latestJob.current = row;
+      setJob(row);
+      receivePreview(row);
+    }
+  }
+  function receiveProgress(row: AIGenerationProgress) {
+    const previous = latestJob.current;
+    if (
+      !mounted.current ||
+      currentJob.current !== row.id ||
+      !previous ||
+      !newerGeneration(previous, row)
+    )
+      return;
+    latestJob.current = { ...previous, ...row };
+    setJob(latestJob.current);
   }
   function close() {
     if (!accepting) onClose();
@@ -54,26 +90,45 @@ export default function AIBuildDialog({
       .catch((e) => {
         if (mounted.current) setError(e.message);
       });
-    const id = sessionStorage.getItem(savedJob);
+    const prior = sessionStorage.getItem(savedPreview);
+    const id = sessionStorage.getItem(savedJob) || prior;
     currentJob.current = id;
     if (id)
-      void api<AIGeneration>(`/ai/generations/${id}`)
-        .then((row) => {
-          if (!mounted.current || currentJob.current !== id) return;
-          setPrompt(row.prompt);
-          if (row.status !== "cancelled") setJob(row);
-          if (row.status === "queued") {
-            void api<AIGeneration>(`/ai/generations/${row.id}/run`, {
-              method: "POST",
-              signal: AbortSignal.timeout(175_000),
-            })
-              .then(receiveJob)
-              .catch(() => {});
+      void (async () => {
+        // Restore the last valid preview even if the newer request has expired
+        // or its reservation never reached the server.
+        if (prior && prior !== id) {
+          try {
+            receivePreview(
+              await api<AIGeneration>(`/ai/generations/${prior}`),
+              false,
+            );
+          } catch (e) {
+            if (
+              (e as { status?: number }).status === 404 &&
+              sessionStorage.getItem(savedPreview) === prior
+            )
+              sessionStorage.removeItem(savedPreview);
           }
-        })
+        }
+        const row = await api<AIGeneration>(`/ai/generations/${id}`);
+        if (!mounted.current || currentJob.current !== id) return;
+        setPrompt(row.prompt);
+        receiveJob(row);
+        if (row.status === "queued") {
+          void api<AIGeneration>(`/ai/generations/${row.id}/run`, {
+            method: "POST",
+            signal: AbortSignal.timeout(175_000),
+          })
+            .then(receiveJob)
+            .catch(() => {});
+        }
+      })()
         .catch((e: Error & { status?: number }) => {
           if (e.status === 404 && sessionStorage.getItem(savedJob) === id)
             sessionStorage.removeItem(savedJob);
+          if (e.status === 404 && sessionStorage.getItem(savedPreview) === id)
+            sessionStorage.removeItem(savedPreview);
           if (mounted.current && e.status !== 404) setError(e.message);
         })
         .finally(() => {
@@ -98,15 +153,11 @@ export default function AIBuildDialog({
           if (active) receiveJob(row);
         })
         .catch((e) => {
-          if (active) setError(e.message);
+          if (active && currentJob.current === job.id) setError(e.message);
         });
     void watchGeneration(job.id, (row) => {
       if (!active) return;
-      setJob((previous) =>
-        currentJob.current === row.id && previous?.id === row.id
-          ? { ...previous, ...row }
-          : previous,
-      );
+      receiveProgress(row);
       if (["ready", "accepted", "failed", "cancelled"].includes(row.status))
         void refresh();
     })
@@ -118,14 +169,20 @@ export default function AIBuildDialog({
     // Realtime drives stage changes; bounded polling also detects an evicted
     // Function or a missed subscription event so the dialog cannot get stuck.
     const timer = setInterval(() => {
-      if (busyStates.includes(job.status)) void refresh();
+      if (
+        latestJob.current &&
+        (busyStates.includes(latestJob.current.status) ||
+          (["ready", "accepted"].includes(latestJob.current.status) &&
+            !latestJob.current.parts.length))
+      )
+        void refresh();
     }, 5000);
     return () => {
       active = false;
       unwatch?.();
       clearInterval(timer);
     };
-  }, [job?.id, job?.status]);
+  }, [job?.id]);
   async function build() {
     if (
       busy ||
@@ -141,6 +198,7 @@ export default function AIBuildDialog({
     // recover a reservation whose response was lost.
     sessionStorage.setItem(savedJob, id);
     setSubmitting(true);
+    latestJob.current = null;
     setJob(null);
     setError("");
     try {
@@ -149,6 +207,7 @@ export default function AIBuildDialog({
         body: JSON.stringify({
           id,
           prompt: prompt.trim(),
+          ...(preview ? { source: preview.id } : {}),
         }),
       }).catch(async (e) => {
         // The reservation may have committed even if its response was lost.
@@ -195,20 +254,34 @@ export default function AIBuildDialog({
     }
   }
   async function accept() {
-    if (!job || accepting) return;
+    if (!preview || accepting || busy || submitting) return;
     setAccepting(true);
     setError("");
     try {
       const world = await api<{ slug: string }>(
-        `/ai/generations/${job.id}/accept`,
+        `/ai/generations/${preview.id}/accept`,
         { method: "POST" },
       );
       sessionStorage.removeItem(savedJob);
+      sessionStorage.removeItem(savedPreview);
       location.assign(`/w/${world.slug}?frame=1`);
     } catch (e) {
       setError((e as Error).message);
       setAccepting(false);
     }
+  }
+  function startOver() {
+    if (busy || submitting || accepting) return;
+    currentJob.current = null;
+    latestJob.current = null;
+    previewId.current = null;
+    setJob(null);
+    setPreview(null);
+    setPrompt("");
+    setError("");
+    sessionStorage.removeItem(savedJob);
+    sessionStorage.removeItem(savedPreview);
+    dialog.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
   }
   return (
     <dialog
@@ -243,7 +316,11 @@ export default function AIBuildDialog({
       </button>
       <div className="ai-copy">
         <h2 id="ai-title">Build with AI</h2>
-        <p className="ai-intro">Describe something you'd like to build.</p>
+        <p className="ai-intro">
+          {ready
+            ? "Describe a change, or use this model."
+            : "Describe something you'd like to build."}
+        </p>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -258,12 +335,16 @@ export default function AIBuildDialog({
             autoFocus
             rows={4}
             maxLength={1200}
-            placeholder="A cosy cabin with a chimney, a red roof and a little pine tree…"
-            value={prompt}
+            placeholder={
+              ready
+                ? "Change a colour, add a detail, or adjust its shape…"
+                : "A cosy cabin with a chimney, a red roof and a little pine tree…"
+            }
+            value={busy ? job!.prompt : prompt}
             disabled={busy || submitting || restoring || accepting}
             onChange={(e) => setPrompt(e.target.value)}
           />
-          {!job && (
+          {!job && !ready && (
             <div className="ai-examples">
               {examples.map((example) => (
                 <button
@@ -287,7 +368,9 @@ export default function AIBuildDialog({
                 </span>
               </>
             ) : ready ? (
-              <span>{job!.parts.length} pieces · ready to make your own</span>
+              <span>
+                {preview!.parts.length} pieces · ready to make your own
+              </span>
             ) : (
               <span>Small models, built from real pieces.</span>
             )}
@@ -321,7 +404,7 @@ export default function AIBuildDialog({
                   prompt.trim().length < 3
                 }
               >
-                {ready || job ? "Build again" : "Build"}
+                {ready ? "Update model" : job ? "Build again" : "Build"}
                 {!ready && <ArrowUpRight size={16} />}
               </button>
             )}
@@ -329,7 +412,7 @@ export default function AIBuildDialog({
               <button
                 type="button"
                 className="primary-button"
-                disabled={accepting}
+                disabled={accepting || busy || submitting}
                 onClick={() => void accept()}
               >
                 {accepting ? "Opening…" : "Use this model"}
@@ -338,6 +421,15 @@ export default function AIBuildDialog({
             )}
           </div>
         </form>
+        {ready && !busy && (
+          <button
+            className="ai-secondary ai-start-over"
+            disabled={accepting || submitting}
+            onClick={startOver}
+          >
+            Start a new model
+          </button>
+        )}
         {busy && (
           <p className="ai-footnote">You can close this while it builds.</p>
         )}
@@ -346,7 +438,7 @@ export default function AIBuildDialog({
         <div className="ai-preview">
           <Scene
             theme={theme}
-            parts={job!.parts}
+            parts={preview!.parts}
             selected={[]}
             ghosts={[]}
             valid
@@ -355,7 +447,7 @@ export default function AIBuildDialog({
             generation={1}
             grid={false}
             quality={false}
-            cameraMode={`iso:${job!.id}`}
+            cameraMode={`iso:${preview!.id}`}
             frameParts
             presentation
             selectMode={false}
@@ -371,7 +463,7 @@ export default function AIBuildDialog({
           />
           <div className="ai-preview-caption">
             <Blocks size={15} />
-            <span>{job!.blueprint?.title}</span>
+            <span>{preview!.blueprint?.title}</span>
           </div>
         </div>
       )}
