@@ -840,6 +840,20 @@ input {
   height: 4px;
   border-radius: 50%;
 }
+.collaborator-cursor {
+  pointer-events: none;
+  user-select: none;
+  width: max-content;
+}
+.collaborator-cursor svg {
+  display: block;
+  filter: drop-shadow(0 1px 2px var(--shadow-soft));
+}
+.collaborator-cursor .remote-label {
+  margin: -5px 0 0 14px;
+  border: 1px solid;
+  font-size: 11px;
+}
 .inspector {
   position: absolute;
   bottom: 42px;

@@ -49,6 +49,7 @@ import {
   submit,
   displayParts,
   setIntent,
+  setCursor,
   sendPresence,
   selectedConnections,
   notice,
@@ -71,6 +72,7 @@ import {
 } from "./movement";
 import { snapToSurface, type DragSurface } from "./snapping";
 import { useTheme, type Theme } from "./theme";
+import { CURSOR_TTL } from "./cursors";
 type Tool = "select" | "build" | "move" | "duplicate";
 function Thumb({ def, theme }: { def: Definition; theme: Theme }) {
   const [src, setSrc] = useState("");
@@ -236,6 +238,10 @@ export default function App() {
   );
   const remote = viewers.map((v) => ({
     ...v,
+    cursor:
+      v.cursor_at && serverNow() - Date.parse(v.cursor_at) < CURSOR_TTL
+        ? v.cursor
+        : null,
     preview:
       v.preview_at && serverNow() - Date.parse(v.preview_at) < 3000
         ? v.preview
@@ -904,6 +910,7 @@ export default function App() {
             onDrop={drop}
             onCancelDrag={cancelDrag}
             onMetrics={inspector ? setMetrics : undefined}
+            onCursor={setCursor}
             onHover={hover}
             onClick={(p, shift) => void click(p, shift)}
           />

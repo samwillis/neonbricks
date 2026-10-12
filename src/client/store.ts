@@ -12,6 +12,7 @@ import type {
   Viewer,
   SceneRow,
   Preview,
+  Position,
   Edit,
   Receipt,
 } from "../shared/types";
@@ -83,13 +84,19 @@ let clock = { server: Date.now(), mono: performance.now() };
 export const serverNow = () => clock.server + performance.now() - clock.mono;
 export const getViewerId = () => viewer;
 let rejoining = false;
-let intent: { preview: Preview | null; selection: string[] } = {
+let intent: {
+    preview: Preview | null;
+    selection: string[];
+    cursor: Position | null;
+  } = {
     preview: null,
     selection: [],
+    cursor: null,
   },
   lastIntent = "",
   lastSample = 0,
-  queued = false;
+  presenceTimer: ReturnType<typeof setTimeout> | undefined,
+  presenceFlight: number | null = null;
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const sent = performance.now(),
     response = await fetch(`${API}/api${path}`, {
@@ -131,6 +138,12 @@ export async function start(slug: string) {
   disposed = false;
   const run = ++epoch,
     active = () => !disposed && run === epoch;
+  clearTimeout(presenceTimer);
+  presenceTimer = undefined;
+  presenceFlight = null;
+  sequence = 0;
+  lastIntent = "";
+  intent = { preview: null, selection: [], cursor: null };
   const schedule = (callback: () => void, delay: number) => {
     const timer = setTimeout(() => {
       renewTimers.delete(timer);
@@ -227,7 +240,7 @@ export async function start(slug: string) {
         state.world &&
         header.generation !== state.world.generation
       ) {
-        intent = { preview: null, selection: [] };
+        intent = { preview: null, selection: [], cursor: null };
         lastIntent = "";
         publish({ pending: [], history: { undo: null, redo: null } });
         void history();
@@ -298,6 +311,8 @@ export function stop() {
   renewTimers.clear();
   clearInterval(heartTimer);
   clearInterval(sessionTimer);
+  clearTimeout(presenceTimer);
+  presenceTimer = undefined;
   client?.close();
   if (viewer && state.world)
     void api(`/worlds/${state.world.id}/viewers/${viewer}`, {
@@ -305,29 +320,58 @@ export function stop() {
     }).catch(() => {});
 }
 export function setIntent(preview: Preview | null, selection: string[]) {
-  intent = { preview, selection };
-  if (!queued) {
-    queued = true;
-    setTimeout(() => {
-      queued = false;
+  intent = { ...intent, preview, selection };
+  queuePresence();
+}
+export function setCursor(cursor: Position | null) {
+  intent = { ...intent, cursor };
+  queuePresence();
+}
+function queuePresence(delay = 200) {
+  if (
+    disposed ||
+    state.status === "error" ||
+    presenceTimer ||
+    presenceFlight === epoch
+  )
+    return;
+  presenceTimer = setTimeout(
+    () => {
+      presenceTimer = undefined;
       void sendPresence(true);
-    }, 500);
-  }
+    },
+    Math.max(delay, 200 - (performance.now() - lastSample)),
+  );
 }
 export async function sendPresence(sample: boolean) {
-  if (!viewer || !state.world || disposed) return;
+  if (
+    !viewer ||
+    !state.world ||
+    state.world.status !== "open" ||
+    state.status === "error" ||
+    disposed ||
+    presenceFlight === epoch
+  )
+    return;
   const current = JSON.stringify(intent),
     now = performance.now();
+  if (sample && now - lastSample < 200) {
+    queuePresence(200 - (now - lastSample));
+    return;
+  }
   if (
     sample &&
     current === lastIntent &&
-    (!intent.preview || now - lastSample < 1000)
+    ((!intent.preview && !intent.cursor) || now - lastSample < 1000)
   )
     return;
   if (sample) {
     lastIntent = current;
     lastSample = now;
   }
+  const run = epoch;
+  presenceFlight = run;
+  let failed = false;
   try {
     await api(`/worlds/${state.world.id}/presence`, {
       method: "POST",
@@ -340,22 +384,35 @@ export async function sendPresence(sample: boolean) {
       }),
     });
   } catch (e) {
+    if (disposed || run !== epoch) return;
+    failed = true;
+    if (sample) lastIntent = "";
+    if ((e as any).status === 401 || (e as any).status === 403) {
+      publish({ status: "error", error: (e as Error).message });
+      return;
+    }
     if ((e as any).status === 410 && !rejoining) {
       rejoining = true;
       try {
         const joined = await api<any>(`/worlds/${state.world.slug}/join`, {
           method: "POST",
         });
-        if (disposed) return;
+        if (disposed || run !== epoch) return;
         viewer = joined.viewer;
         sequence = 0;
         lastIntent = "";
-        await sendPresence(true);
       } catch (error) {
         publish({ status: "stale", error: (error as Error).message });
       } finally {
         rejoining = false;
       }
+    }
+  } finally {
+    if (run === epoch) {
+      presenceFlight = null;
+      // Only the newest pointer position waits behind a slow request.
+      if (JSON.stringify(intent) !== lastIntent)
+        queuePresence(failed ? 1000 : 200);
     }
   }
 }

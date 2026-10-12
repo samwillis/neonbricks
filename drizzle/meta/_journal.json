@@ -15,6 +15,13 @@
       "when": 1791828737153,
       "tag": "0001_icy_king_cobra",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791840166319,
+      "tag": "0002_glamorous_hellcat",
+      "breakpoints": true
     }
   ]
 }

@@ -17,6 +17,7 @@ import { execute, reconnectParts } from "./commands";
 import { realtime, sceneQuery, presenceQuery, historyQuery } from "./live";
 import { starter } from "../shared/starter";
 import { validPart, collision } from "../shared/geometry";
+import { WORLD_LIMIT, HEIGHT_LIMIT, UNIT } from "../shared/types";
 const origins = (
   process.env.ALLOWED_ORIGINS ||
   "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
@@ -226,6 +227,24 @@ app.post("/api/worlds/:world/presence", async (c) => {
       generation: z.number().int().positive(),
       selection: z.array(z.uuid()).max(100),
       preview: preview.nullable(),
+      // Optional for clients loaded before the cursor feature was deployed.
+      cursor: z
+        .object({
+          x: z
+            .number()
+            .min(-WORLD_LIMIT - UNIT)
+            .max(WORLD_LIMIT + UNIT),
+          y: z
+            .number()
+            .min(-UNIT)
+            .max(HEIGHT_LIMIT + UNIT),
+          z: z
+            .number()
+            .min(-WORLD_LIMIT - UNIT)
+            .max(WORLD_LIMIT + UNIT),
+        })
+        .nullable()
+        .optional(),
       sample: z.boolean(),
     })
     .parse(await c.req.json());
@@ -235,7 +254,7 @@ app.post("/api/worlds/:world/presence", async (c) => {
       if (w.generation !== v.generation || w.status !== "open")
         throw new DomainError("Workshop changed");
       const r = await client.query(
-        "UPDATE viewer_sessions SET sequence=$5,selection=$6,preview=CASE WHEN $8 THEN $7::jsonb ELSE preview END,preview_at=CASE WHEN $8 THEN clock_timestamp() ELSE preview_at END,generation=$9,expires_at=clock_timestamp()+interval '30 seconds' WHERE id=$1 AND world=$2 AND guest=$3 AND session=$4 AND sequence<$5 RETURNING id",
+        "UPDATE viewer_sessions SET sequence=$5,selection=$6,preview=CASE WHEN $8 THEN $7::jsonb ELSE preview END,preview_at=CASE WHEN $8 THEN clock_timestamp() ELSE preview_at END,cursor=CASE WHEN $8 AND $11 THEN $10::jsonb ELSE cursor END,cursor_at=CASE WHEN $8 AND $11 THEN clock_timestamp() ELSE cursor_at END,generation=$9,expires_at=clock_timestamp()+interval '30 seconds' WHERE id=$1 AND world=$2 AND guest=$3 AND session=$4 AND sequence<$5 RETURNING id",
         [
           v.viewer,
           world,
@@ -246,6 +265,8 @@ app.post("/api/worlds/:world/presence", async (c) => {
           JSON.stringify(v.preview),
           v.sample,
           v.generation,
+          JSON.stringify(v.cursor ?? null),
+          v.cursor !== undefined,
         ],
       );
       if (!r.rowCount) {

@@ -30,7 +30,7 @@ export function sceneQuery(world: string, a: Identity) {
 }
 export function presenceQuery(world: string, a: Identity) {
   return rawSql<Viewer>(
-    `SELECT v.id::text,v.guest::text,g.name,g.color,v.selection,v.preview,v.generation,v.preview_at::text,v.expires_at::text FROM viewer_sessions v JOIN guests g ON g.id=v.guest WHERE v.world=$1::uuid AND ${access}`,
+    `SELECT v.id::text,v.guest::text,g.name,g.color,v.selection,v.preview,v.cursor,v.generation,v.preview_at::text,v.cursor_at::text,v.expires_at::text FROM viewer_sessions v JOIN guests g ON g.id=v.guest WHERE v.world=$1::uuid AND ${access}`,
     [world, a.guest, a.session],
   );
 }

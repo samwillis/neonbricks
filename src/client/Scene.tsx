@@ -15,6 +15,7 @@ import { model } from "./shapes";
 import type { Position } from "../shared/types";
 import { installGestures } from "./gestures";
 import type { DragSurface } from "./snapping";
+import { installCursorTracking } from "./cursors";
 export type FrameMetrics = {
   p95: number;
   fps: number;
@@ -43,6 +44,7 @@ type Props = {
   onDrop: () => void;
   onCancelDrag: () => void;
   onMetrics?: (m: FrameMetrics) => void;
+  onCursor: (point: Position | null) => void;
   onHover: (
     point: THREE.Vector3,
     normal: THREE.Vector3 | undefined,
@@ -267,8 +269,28 @@ function Gestures(p: Props) {
   const { gl, camera, scene, controls } = useThree();
   const latest = useRef(p);
   const abort = useRef<() => void>(() => {});
+  const cursor = useRef<ReturnType<typeof installCursorTracking> | null>(null);
+  const lastCursorFrame = useRef(0);
   latest.current = p;
+  useFrame(({ clock }) => {
+    if (
+      latest.current.presentation ||
+      clock.elapsedTime - lastCursorFrame.current < 0.1
+    )
+      return;
+    lastCursorFrame.current = clock.elapsedTime;
+    cursor.current?.update();
+  });
   useEffect(() => {
+    // Register first, before a brick drag stops native pointer propagation.
+    const tracking = installCursorTracking(
+      gl.domElement,
+      camera,
+      scene,
+      (point) =>
+        latest.current.onCursor(latest.current.presentation ? null : point),
+    );
+    cursor.current = tracking;
     const gestures = installGestures(
       gl.domElement,
       camera,
@@ -277,7 +299,11 @@ function Gestures(p: Props) {
       () => latest.current,
     );
     abort.current = gestures.cancel;
-    return gestures.dispose;
+    return () => {
+      tracking.dispose();
+      cursor.current = null;
+      gestures.dispose();
+    };
   }, [gl, camera, scene, controls]);
   useEffect(() => {
     if (!p.canMove || p.presentation || !p.selectMode) abort.current();
@@ -285,7 +311,60 @@ function Gestures(p: Props) {
   useEffect(() => {
     abort.current();
   }, [p.generation, p.cameraMode]);
+  useEffect(() => {
+    cursor.current?.clear();
+  }, [p.generation, p.presentation]);
+  useEffect(() => {
+    cursor.current?.invalidate();
+  }, [p.parts]);
   return null;
+}
+
+function CollaboratorCursor({
+  viewer,
+}: {
+  viewer: Viewer & { cursor: Position };
+}) {
+  const root = useRef<THREE.Group>(null);
+  const target = useMemo(
+    () =>
+      new THREE.Vector3(
+        viewer.cursor.x / 6,
+        viewer.cursor.y / 6,
+        viewer.cursor.z / 6,
+      ),
+    [viewer.cursor.x, viewer.cursor.y, viewer.cursor.z],
+  );
+  const initial = useRef(target.clone());
+  useFrame((_, delta) => {
+    root.current?.position.lerp(target, 1 - Math.exp(-18 * delta));
+  });
+  return (
+    <group ref={root} position={initial.current}>
+      <Html zIndexRange={[6, 0]} style={{ pointerEvents: "none" }}>
+        <div
+          className="collaborator-cursor"
+          data-viewer={viewer.id}
+          aria-label={`${viewer.name}'s cursor`}
+          style={{ color: viewer.color }}
+        >
+          <svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true">
+            <path
+              d="M1 1L19 16L11 17L7 24Z"
+              fill="currentColor"
+              stroke="white"
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="remote-label" style={{ borderColor: viewer.color }}>
+            <i style={{ background: viewer.color }} />
+            {viewer.name}
+          </span>
+        </div>
+      </Html>
+    </group>
+  );
 }
 
 function MoveHandles({ parts }: { parts: Part[] }) {
@@ -442,6 +521,7 @@ function Contents(p: Props) {
         rotation={[-Math.PI / 2, 0, 0]}
         position={[0, -0.048, 0]}
         receiveShadow
+        userData={{ cursorSurface: true }}
         onPointerMove={(e) => {
           if (!e.buttons) {
             e.stopPropagation();
@@ -524,6 +604,9 @@ function Contents(p: Props) {
           .filter((v) => v.id !== p.guest && v.generation === p.generation)
           .map((v) => (
             <group key={v.id}>
+              {v.cursor && (
+                <CollaboratorCursor viewer={{ ...v, cursor: v.cursor }} />
+              )}
               {v.preview && (
                 <Piece part={v.preview} opacity={0.3} tint={v.color} />
               )}
@@ -567,7 +650,7 @@ function Contents(p: Props) {
                 center
                 style={{
                   pointerEvents: "none",
-                  display: v.preview ? "block" : "none",
+                  display: v.preview && !v.cursor ? "block" : "none",
                 }}
               >
                 <div className="remote-label">

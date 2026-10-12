@@ -78,8 +78,10 @@ export type Viewer = {
   color: string;
   selection: string[];
   preview: Preview | null;
+  cursor: Position | null;
   generation: number;
   preview_at: string | null;
+  cursor_at: string | null;
   expires_at: string;
 };
 export type Edit = {

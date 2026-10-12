@@ -16,6 +16,7 @@
     "neon": "node scripts/neon.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "test:access": "node --env-file=.env.local --import tsx scripts/test-access.ts",
+    "test:presence": "node --env-file=.env.local --import tsx scripts/test-presence.ts",
     "test:capacity": "node --env-file=.env.local --import tsx scripts/test-capacity.ts",
     "format": "prettier --write src scripts tests *.ts *.md",
     "test:locks": "node --env-file=.env.local --import tsx scripts/test-locks.ts"

@@ -63,13 +63,19 @@ The inspector's responsive position previously let its panel cover its toggle. T
 
 Transient renewal failures retry after one second, including when sealing succeeded before the subscription renewal failed. Scheduling uses the estimated server clock. Epoch/disposal guards prevent obsolete callbacks from acting on another room.
 
+Collaborative cursors now use fractional world-space points on actual bricks and the board, with colours and names from viewer presence. The additive migration adds `cursor` and `cursor_at` to `viewer_sessions`; the staging Function validates bounds and updates them under the existing viewer sequence check. Heartbeats preserve sample timestamps, older clients can omit the cursor field, and remote cursors disappear after three seconds without samples. Cursor requests coalesce at up to five per second with one request in flight, while local interpolation smooths their display.
+
+Nine cursor tests cover picking through overlays, board hits, misses, camera reprojection, canvas departure, pointer cancellation, focus loss, hidden tabs, disposal, and touch input. Five sender tests cover coalescing behind a slow request, selection preservation, stationary refresh and departure, transient retries, and stopping during queued or expired requests. The suite has 50 passing tests. `test:presence` uses independent guests in a disposable staging room and verifies committed cursor delivery over Realtime, ordering, heartbeat timestamps, bounds, viewer ownership, older-client compatibility, clearing, leaving, and delayed packets. Two initial runs timed out waiting for updated live rows at ten seconds after deployment; two subsequent runs passed. These checks make no new latency or capacity claim.
+
+The production-build browser check used a separate rover room, preserving the user's build. A peer saw a cursor on a selected brick and on the board, retained the brick target after switching from 3D to Top view, and cleared the cursor when the source mouse moved into the catalogue or its tab closed. The original 26 parts and 37 connections remained unchanged. The pointer and name preview is saved as `artifacts/collaborative-cursors.png`.
+
 An active guest-session renewal was also checked through the deployed API: it extends the sliding expiry and clamps it to the absolute expiry. This is separate from the ten-minute capability-renewal workload.
 
 ## Remaining public-release work
 
 - Choose the frontend host/domain, add its exact origins, and verify its SPA routing and HTTPS deployment.
 - Resolve the latency/workload release gate and measure local preview latency and bulk-edit visibility separately.
-- Include continuous preview traffic, cold wake-up, and client memory/subscription growth in final capacity and long-session qualification.
+- Include continuous preview and cursor traffic, cold wake-up, and client memory/subscription growth in final capacity and long-session qualification.
 - Rehearse recovery from a prior compatible application release once this first runnable baseline has a successor.
 - Add edge-level abuse control for anonymous session and room creation, and settle long-term storage pruning and ownership recovery. This staging demo does not claim those production policies are complete.
 - Run the five-visitor first-minute usability study and the 5,000-part growth test.

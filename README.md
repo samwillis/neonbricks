@@ -2,7 +2,7 @@
 
 A collaborative Three.js construction workshop. Postgres stores the model, connections, guests, presence, history, and command receipts. Neon Functions validate edits, and Neon Realtime publishes the committed scene.
 
-The demo includes 36 procedural parts, 12 colours, a starter rover and workbench, placement and connector snapping, multi-selection, move/copy/rotate/recolour/delete, personal undo/redo, collaborator previews and selection outlines, camera presets, presentation mode, light and dark themes, and a demo inspector.
+The demo includes 36 procedural parts, 12 colours, a starter rover and workbench, placement and connector snapping, multi-selection, move/copy/rotate/recolour/delete, personal undo/redo, collaborator cursors, previews and selection outlines, camera presets, presentation mode, light and dark themes, and a demo inspector.
 
 Mechanical assemblies are static. Axles and pins fit authored holes; gears have fixed cardinal mesh poses; hinge leaves pair in a coplanar pose. Free-angle joints, physical simulation, and motors belong to the subsequent phases in [PLAN.md](PLAN.md).
 
@@ -48,6 +48,8 @@ Click an existing piece to select it and reveal the X/Y/Z arrows. Drag onto anot
 | Cancel             | Escape                                                          |
 
 The room menu creates a rover room or blank canvas. Share that room's URL with a second browser/profile. Rename builders from their avatar. The creator can restore the starter, clear, close, and reopen their own room. Use presentation mode to hide the drawer and editing tools; the inspector shows transaction IDs, pending work, connection counts, and frame timing.
+
+Each collaborator has a coloured pointer and name on the brick or board under their mouse. Cursor positions are shared in world coordinates, so they stay attached to the same surface when people use different cameras. They clear when the mouse leaves the canvas, the browser loses focus, or the tab is hidden. Presentation mode hides them along with the editing tools.
 
 The **Display** menu in the header selects Light, Dark, or System, and toggles the construction grid and enhanced lighting. Turning enhanced lighting off reduces shadow detail and render resolution for better performance. System follows your operating system; an explicit theme choice persists in this browser and synchronizes across open tabs. The panels, thumbnails, board, lighting, and selection indicators all follow the theme. The demo inspector has a canvas toggle and a close button; Escape also closes it. The interface takes its typography and palette from neon.com. Its custom `neonbricks` wordmark matches the Databricks lettering, with a stylised line-drawn brick symbol on the left. Inter and the logo are bundled locally; provenance and the font licence are recorded under `public/brand/` and `public/fonts/`.
 
@@ -103,7 +105,7 @@ One deterministic `UNION ALL` query carries the header, parts, and connections. 
 
 Guest tokens are opaque and hashed in Postgres. Sessions slide for 30 minutes and have a 24-hour absolute maximum. Every sealed query contains membership and session-revocation predicates; capabilities expire after 60 seconds and renew before expiry. Session expiry denies renewal, so an existing capability can retain access only until its recorded expiry. There is no dependence on RLS in the preview engine.
 
-Viewers heartbeat every ten seconds, expire visually after thirty seconds, and leave immediately on a clean close. Preview samples are throttled and expire visually after three seconds. A heartbeat does not refresh the preview timestamp. Deleted viewers are never implicitly recreated by a delayed packet; a returning browser rejoins with a new viewer ID.
+Viewers heartbeat every ten seconds, expire visually after thirty seconds, and leave immediately on a clean close. Preview and cursor samples are coalesced at up to five requests per second, with one request in flight per viewer. A stationary preview or cursor refreshes once per second while the tab is visible; both expire visually after three seconds without samples. A heartbeat does not refresh their timestamps. Cursor positions are fractional sixth-stud coordinates, stored separately from placement previews in `viewer_sessions`; the existing Realtime presence query delivers them. Each cursor interpolates locally between samples. Deleted viewers are never implicitly recreated by a delayed packet; a returning browser rejoins with a new viewer ID.
 
 New rooms accept edits for 24 hours, after which the cleanup job closes them. Closed rooms retain their model and receipts in this staging build; automatic permanent pruning is not enabled. The default workshop is exempt from expiry. There is no ownership recovery after losing a guest session, so create a new presenter room when that happens.
 
@@ -115,6 +117,7 @@ npm run typecheck
 npm run build
 npm run test:db
 npm run test:access
+npm run test:presence
 npm run test:locks
 npm run test:capacity
 ```
