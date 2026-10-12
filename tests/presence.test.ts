@@ -75,7 +75,7 @@ describe("coalesced viewer presence", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(payloads).toHaveLength(1);
     release(reply({}));
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(0);
     expect(payloads).toHaveLength(2);
     expect(payloads[1]).toMatchObject({
       cursor: { x: 7, y: 8, z: 9 },
@@ -87,6 +87,15 @@ describe("coalesced viewer presence", () => {
     expect(payloads).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(200);
     expect(payloads).toHaveLength(3);
+  });
+  it("paces quick requests from their send time rather than adding a delay after each response", async () => {
+    store.setCursor({ x: 1, y: 2, z: 3 });
+    await vi.advanceTimersByTimeAsync(200);
+    store.setCursor({ x: 4, y: 5, z: 6 });
+    await vi.advanceTimersByTimeAsync(199);
+    expect(payloads).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(payloads).toHaveLength(2);
   });
   it("refreshes a stationary cursor, then sends its departure without replaying it", async () => {
     store.setCursor({ x: 1, y: 2, z: 3 });

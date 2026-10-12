@@ -16,6 +16,7 @@ import type { Position } from "../shared/types";
 import { installGestures } from "./gestures";
 import type { DragSurface } from "./snapping";
 import { installCursorTracking } from "./cursors";
+import { CursorMotion } from "./cursor-motion";
 export type FrameMetrics = {
   p95: number;
   fps: number;
@@ -336,8 +337,14 @@ function CollaboratorCursor({
     [viewer.cursor.x, viewer.cursor.y, viewer.cursor.z],
   );
   const initial = useRef(target.clone());
+  const motion = useRef<CursorMotion | null>(null);
+  if (!motion.current) motion.current = new CursorMotion(target);
+  useEffect(() => {
+    motion.current!.receive(target, performance.now());
+  }, [target, viewer.cursor_at]);
   useFrame((_, delta) => {
-    root.current?.position.lerp(target, 1 - Math.exp(-18 * delta));
+    motion.current!.advance(delta);
+    root.current?.position.copy(motion.current!.position);
   });
   return (
     <group ref={root} position={initial.current}>

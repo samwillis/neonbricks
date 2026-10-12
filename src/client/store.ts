@@ -327,7 +327,7 @@ export function setCursor(cursor: Position | null) {
   intent = { ...intent, cursor };
   queuePresence();
 }
-function queuePresence(delay = 200) {
+function queuePresence(delay = 0) {
   if (
     disposed ||
     state.status === "error" ||
@@ -412,7 +412,7 @@ export async function sendPresence(sample: boolean) {
       presenceFlight = null;
       // Only the newest pointer position waits behind a slow request.
       if (JSON.stringify(intent) !== lastIntent)
-        queuePresence(failed ? 1000 : 200);
+        queuePresence(failed ? 1000 : 0);
     }
   }
 }

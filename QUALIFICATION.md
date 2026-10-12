@@ -69,6 +69,10 @@ Nine cursor tests cover picking through overlays, board hits, misses, camera rep
 
 The production-build browser check used a separate rover room, preserving the user's build. A peer saw a cursor on a selected brick and on the board, retained the brick target after switching from 3D to Top view, and cleared the cursor when the source mouse moved into the catalogue or its tab closed. The original 26 parts and 37 connections remained unchanged. The pointer and name preview is saved as `artifacts/collaborative-cursors.png`.
 
+Cursor animation subsequently changed from fast exponential interpolation to a critically damped spring that adapts to the arrival cadence and preserves position and velocity when a new point arrives. This avoids reaching each point quickly and pausing before the next packet. The sender also removes the extra 200 ms wait after a response: it keeps the minimum between dispatches and the single in-flight request. Seven animation tests cover continuous travel at 200, 350, and 500 ms sample intervals, jittery delivery and stopping, continuity across packets, frame-rate independence, stationary refreshes, and resuming after a backgrounded frame. A sender regression checks the dispatch interval. All 58 tests and the production build pass.
+
+A moving-cursor fixture sent 447 samples over 90 seconds through the deployed Function and Realtime in a disposable rover room. The production-build observer's DOM showed 114 changing projected positions in a 1.9-second observation window, rather than one screen-position change per network sample. The cursor cleared when the fixture ended, with the original 26 pieces and 37 connections unchanged. Observations are saved as `artifacts/cursor-motion-observed.json` and the preview as `artifacts/cursor-smoothing.png`. This verifies local animation in that browser; it does not change the public latency or capacity qualification.
+
 An active guest-session renewal was also checked through the deployed API: it extends the sliding expiry and clamps it to the absolute expiry. This is separate from the ten-minute capability-renewal workload.
 
 ## Remaining public-release work
