@@ -1,4 +1,26 @@
 export type Position = { x: number; y: number; z: number };
+export type AIGenerationStatus =
+  | "queued"
+  | "designing"
+  | "checking"
+  | "repairing"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "accepted";
+export type AIGenerationProgress = {
+  id: string;
+  status: AIGenerationStatus;
+  attempt: number;
+  error: string | null;
+  world: string | null;
+};
+export type AIGeneration = AIGenerationProgress & {
+  prompt: string;
+  model: string;
+  parts: Part[];
+  blueprint: { title: string; summary: string } | null;
+};
 export type Part = {
   id: string;
   key: string;

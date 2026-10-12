@@ -15,6 +15,7 @@ import type {
   Position,
   Edit,
   Receipt,
+  AIGenerationProgress,
 } from "../shared/types";
 import { sceneEntity } from "../shared/types";
 type Pending = {
@@ -106,7 +107,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...init.headers,
       },
-      signal: AbortSignal.timeout(20_000),
+      signal: init.signal || AbortSignal.timeout(20_000),
     });
   const data = await response.json();
   if (!response.ok) {
@@ -116,9 +117,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     e.status = response.status;
     throw e;
   }
-  if (data.serverTime) {
+  const elapsed = performance.now() - sent;
+  // A long AI invocation includes inference time, not just network latency.
+  // It must not move the presence clock forward by half the generation time.
+  if (data.serverTime && elapsed < 5000) {
     clock = {
-      server: data.serverTime + (performance.now() - sent) / 2,
+      server: data.serverTime + elapsed / 2,
       mono: performance.now(),
     };
     publish({ serverOffset: clock.server - Date.now() });
@@ -127,6 +131,36 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 export function notice(message: string | null) {
   publish({ error: message });
+}
+export async function watchGeneration(
+  id: string,
+  receive: (row: AIGenerationProgress) => void,
+) {
+  if (!client)
+    throw new Error("Wait for the workshop to connect, then try again.");
+  const capability = await api<SealedLiveQuery<AIGenerationProgress>>(
+    `/ai/generations/${id}/live`,
+  );
+  const sub = client.subscribe(capability);
+  const off = sub.onChange((snapshot) => {
+    if (snapshot.data?.[0]) receive(snapshot.data[0]);
+  });
+  let stopped = false;
+  const timer = setInterval(() => {
+    void api<SealedLiveQuery<AIGenerationProgress>>(
+      `/ai/generations/${id}/live`,
+    )
+      .then((next) => {
+        if (!stopped) return sub.renew(next);
+      })
+      .catch(() => {});
+  }, 40_000);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    off();
+    sub.unsubscribe();
+  };
 }
 async function history() {
   if (!state.world) return;

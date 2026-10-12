@@ -6,6 +6,8 @@ The demo includes 36 procedural parts, 12 colours, a starter rover and workbench
 
 Mechanical assemblies are static. Axles and pins fit authored holes; gears have fixed cardinal mesh poses; hinge leaves pair in a coplanar pose. Free-angle joints, physical simulation, and motors belong to the subsequent phases in [PLAN.md](PLAN.md).
 
+The workshop menu also includes **Build with AI**: prompt a model through Neon AI Gateway, preview a validated build and create a new collaborative workshop. Progress and drafts live in Postgres and arrive through Realtime. See [AI_BUILDING.md](AI_BUILDING.md) for the format, limits and setup.
+
 ## Run the existing staging demo
 
 Requirements: Node 22.18 or newer. The unpublished SDK packages are included as pinned tarballs in `.sdk/`, so the app does not need the CLI to run.
@@ -119,6 +121,7 @@ npm run test:db
 npm run test:access
 npm run test:presence
 npm run test:locks
+npm run test:ai
 npm run test:capacity
 ```
 

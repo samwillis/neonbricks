@@ -4,6 +4,7 @@ const origins = (
   "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
 ).split(",");
 export default defineConfig({
+  aiGateway: true,
   preview: { realtime: { allowedOrigins: origins } },
   triggers: {
     "workshop-cleanup": {
@@ -21,6 +22,8 @@ export default defineConfig({
         REALTIME_SECRET: process.env.REALTIME_SECRET!,
         REALTIME_URL: process.env.REALTIME_URL!,
         ALLOWED_ORIGINS: origins.join(","),
+        AI_MODEL: process.env.AI_MODEL || "gpt-5-4",
+        AI_DAILY_LIMIT: process.env.AI_DAILY_LIMIT || "40",
       },
     },
   },

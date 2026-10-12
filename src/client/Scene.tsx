@@ -36,6 +36,7 @@ type Props = {
   grid: boolean;
   quality: boolean;
   cameraMode: string;
+  frameParts?: boolean;
   presentation: boolean;
   selectMode: boolean;
   canMove: boolean;
@@ -230,10 +231,45 @@ function Piece({
     </group>
   );
 }
-function Camera({ mode }: { mode: string }) {
-  const { camera } = useThree(),
+const noParts: Part[] = [];
+function Camera({ mode, parts = noParts }: { mode: string; parts?: Part[] }) {
+  const { camera, size } = useThree(),
     controls = useRef<OrbitImpl>(null);
+  const framed = useRef("");
   useEffect(() => {
+    if (parts.length && mode.startsWith("iso")) {
+      if (framed.current === mode) return;
+      const box = new THREE.Box3();
+      for (const part of parts) {
+        const b = boundsForHandles(part);
+        box.expandByPoint(
+          new THREE.Vector3(b.minx / 6, b.miny / 6, b.minz / 6),
+        );
+        box.expandByPoint(
+          new THREE.Vector3(b.maxx / 6, b.maxy / 6, b.maxz / 6),
+        );
+      }
+      const center = box.getCenter(new THREE.Vector3());
+      const radius = box.getSize(new THREE.Vector3()).length() / 2;
+      const angle = Math.atan(
+        Math.tan(
+          THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov / 2),
+        ) * Math.min(1, size.width / size.height),
+      );
+      const distance = Math.min(
+        60,
+        Math.max(7, (radius / Math.sin(angle)) * 1.25),
+      );
+      camera.position
+        .copy(center)
+        .add(
+          new THREE.Vector3(22, 22, 27).normalize().multiplyScalar(distance),
+        );
+      controls.current?.target.copy(center);
+      controls.current?.update();
+      framed.current = mode;
+      return;
+    }
     const poses: Record<string, number[]> = {
       iso: [22, 22, 27],
       top: [0, 34, 0.001],
@@ -244,7 +280,7 @@ function Camera({ mode }: { mode: string }) {
     camera.position.set(p[0], p[1], p[2]);
     controls.current?.target.set(0, 1, 0);
     controls.current?.update();
-  }, [mode, camera]);
+  }, [mode, camera, parts, size.width, size.height]);
   return (
     <OrbitControls
       ref={controls}
@@ -551,7 +587,7 @@ function Contents(p: Props) {
           position={[0, -0.043, 0]}
         />
       )}
-      <Camera mode={p.cameraMode} />
+      <Camera mode={p.cameraMode} parts={p.frameParts ? p.parts : noParts} />
       <Gestures {...p} />
       {CATALOGUE.map((d) => (
         <Instances

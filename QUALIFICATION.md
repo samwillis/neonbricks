@@ -75,6 +75,26 @@ A moving-cursor fixture sent 447 samples over 90 seconds through the deployed Fu
 
 An active guest-session renewal was also checked through the deployed API: it extends the sliding expiry and clamps it to the absolute expiry. This is separate from the ten-minute capability-renewal workload.
 
+## AI building
+
+The workshop menu now offers **Build with AI**. The existing Sam staging branch has AI Gateway enabled, and the deployed Neon Function calls it using the server-side branch credential. Postgres stores generation requests, stages, candidate blueprints, validation results and token counts; Realtime delivers progress. Acceptance creates a new workshop in one transaction with ordinary pieces, connections and connector claims. See [AI_BUILDING.md](AI_BUILDING.md) for the versioned format and operating limits.
+
+All 70 unit tests and the production build pass. The AI lifecycle integration test passed three times through the deployed Function, Postgres and Realtime, without paid inference: guest isolation, idempotent reservation, quota enforcement, three concurrent acceptances returning the same workshop, topology import, subsequent edits, collision rejection, cancellation, invalid-candidate rollback and interrupted-work expiry. The existing database regression suite also passed with one trial per race scenario and all 28 mechanical fits. This regression does not replace the earlier 100-trial qualification or the failed capacity measurement.
+
+Three live generations passed with the final `gpt-5-4` configuration and medium reasoning:
+
+| Prompt                                      | Pieces | Candidates | Time to ready | Output tokens, including reasoning |
+| ------------------------------------------- | -----: | ---------: | ------------: | ---------------------------------: |
+| Cabin with red roof, chimney and pine tree  |     46 |          1 |        89.1 s |                             12,377 |
+| Red and white lighthouse, rock base and sea |     30 |          2 |        87.2 s |                             13,121 |
+| Yellow exploration rover with chunky wheels |     45 |          1 |       104.2 s |                             14,305 |
+
+Each result passed the shared collision, bounds, connector-claim and grounding checks and was accepted into a workshop. The rover includes eight wheel pieces; this is a static model, with separate grounded wheel assemblies, and does not establish a working vehicle mechanism. During tuning, earlier candidates failed geometric checks and a high-reasoning request exhausted a smaller output budget without producing JSON. Failed candidates were never imported. These three successful runs establish the demonstrated examples, not a general success rate, latency promise or cost forecast. Complex prompts may still require a simpler description or a retry.
+
+The production-build browser check used an isolated workshop and preserved the user's existing build. It verified closing and reopening during generation, restoring the ready preview after reload, explicit acceptance, automatic camera framing, selection, recolouring and undo on generated pieces. The prompt dialog was inspected in light and dark modes and at a 390-pixel viewport without page overflow; Escape dismisses it and the textarea receives initial focus. Original display preferences and viewport were restored. Late responses from an older job cannot replace a newer draft, and a long inference request is excluded from presence-clock estimation.
+
+Raw results are saved under ignored `artifacts/ai-cabin-gpt-medium.json`, `artifacts/ai-lighthouse.json` and `artifacts/ai-rover-gpt-medium.json`. The preview is `artifacts/ai-preview.png`, and the accepted lighthouse is `artifacts/ai-lighthouse-workshop.png`. Functions use a bounded HTTP invocation with a lease, not a durable job queue; eviction can require retry. These AI checks do not change the public-capacity release gate.
+
 ## Remaining public-release work
 
 - Choose the frontend host/domain, add its exact origins, and verify its SPA routing and HTTPS deployment.
@@ -82,6 +102,7 @@ An active guest-session renewal was also checked through the deployed API: it ex
 - Include continuous preview and cursor traffic, cold wake-up, and client memory/subscription growth in final capacity and long-session qualification.
 - Rehearse recovery from a prior compatible application release once this first runnable baseline has a successor.
 - Add edge-level abuse control for anonymous session and room creation, and settle long-term storage pruning and ownership recovery. This staging demo does not claim those production policies are complete.
+- Qualify AI cost, success rate and concurrency for the intended audience, and enforce the desired Gateway spending policy. Current request limits bound this staging demo; they do not establish a public service budget.
 - Run the five-visitor first-minute usability study and the 5,000-part growth test.
 - Measure command dispatch to a peer's actual painted frame if the launch makes a browser-render visibility claim. The capacity script measures authoritative SDK delivery.
 - Qualify the intended public audience's hardware and network. Current rendering evidence comes from an M4 Max.

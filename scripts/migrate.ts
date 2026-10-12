@@ -21,6 +21,7 @@ for (const table of [
   "part_connections",
   "viewer_sessions",
   "guest_world_history",
+  "ai_generations",
 ])
   await p.query(`ALTER TABLE ${table} REPLICA IDENTITY FULL`);
 const { rows } = await p.query("SELECT id FROM worlds WHERE slug='workshop'");

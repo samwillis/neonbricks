@@ -18,6 +18,16 @@ import { realtime, sceneQuery, presenceQuery, historyQuery } from "./live";
 import { starter } from "../shared/starter";
 import { validPart, collision } from "../shared/geometry";
 import { WORLD_LIMIT, HEIGHT_LIMIT, UNIT } from "../shared/types";
+import {
+  aiAvailable,
+  createGeneration,
+  getGeneration,
+  runGeneration,
+  cancelGeneration,
+  acceptGeneration,
+  generationQuery,
+  expireGenerations,
+} from "./ai";
 const origins = (
   process.env.ALLOWED_ORIGINS ||
   "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
@@ -46,6 +56,7 @@ app.get("/api/health", (c) =>
     ok: true,
     backend: "Neon Functions",
     realtime: !!process.env.REALTIME_SECRET,
+    ai: aiAvailable(),
   }),
 );
 const position = z.object({
@@ -98,6 +109,7 @@ app.post("/api/session", async (c) => {
 app.post("/api/cleanup", async (c) => {
   const delivery = await parseTriggerDelivery(c.req.raw);
   if (!delivery.ok) return c.json({ error: "Trigger delivery required" }, 401);
+  await expireGenerations();
   const result = await transaction(async (client) => {
     const closed = await client.query(
       "UPDATE worlds SET status='closed',generation=generation+1 WHERE status='open' AND expires_at<clock_timestamp() RETURNING id",
@@ -167,6 +179,47 @@ app.post("/api/worlds", async (c) => {
     201,
   );
 });
+app.get("/api/ai/config", (c) =>
+  c.json({ available: aiAvailable(), maxParts: 100 }),
+);
+app.post("/api/ai/generations", async (c) => {
+  const input = z
+    .object({ id: z.uuid(), prompt: z.string().trim().min(3).max(1200) })
+    .parse(await c.req.json());
+  return c.json(await createGeneration(c.get("identity"), input), 201);
+});
+app.get("/api/ai/generations/:id", async (c) =>
+  c.json(
+    await getGeneration(c.get("identity"), z.uuid().parse(c.req.param("id"))),
+  ),
+);
+app.get("/api/ai/generations/:id/live", async (c) => {
+  const a = c.get("identity"),
+    id = z.uuid().parse(c.req.param("id"));
+  await getGeneration(a, id);
+  return c.json(await realtime().seal({ query: generationQuery(a, id) }));
+});
+app.post("/api/ai/generations/:id/run", async (c) =>
+  c.json(
+    await runGeneration(c.get("identity"), z.uuid().parse(c.req.param("id"))),
+  ),
+);
+app.post("/api/ai/generations/:id/cancel", async (c) =>
+  c.json(
+    await cancelGeneration(
+      c.get("identity"),
+      z.uuid().parse(c.req.param("id")),
+    ),
+  ),
+);
+app.post("/api/ai/generations/:id/accept", async (c) =>
+  c.json(
+    await acceptGeneration(
+      c.get("identity"),
+      z.uuid().parse(c.req.param("id")),
+    ),
+  ),
+);
 app.post("/api/worlds/:slug/join", async (c) =>
   c.json(await joinWorld(c.get("identity"), c.req.param("slug"))),
 );

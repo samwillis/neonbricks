@@ -31,9 +31,11 @@ import {
   Sun,
   Moon,
   Monitor,
+  Sparkles,
 } from "lucide-react";
 import * as THREE from "three";
 import Scene, { type FrameMetrics } from "./Scene";
+import AIBuildDialog from "./AIBuildDialog";
 import {
   CATALOGUE,
   BY_KEY,
@@ -119,6 +121,7 @@ function ToolButton({
 export default function App() {
   const { theme, preference, setPreference } = useTheme();
   const [displayMenu, setDisplayMenu] = useState(false);
+  const [aiDialog, setAiDialog] = useState(false);
   const displayControl = useRef<HTMLDivElement>(null);
   const displayButton = useRef<HTMLButtonElement>(null);
   const inspectorButton = useRef<HTMLButtonElement>(null);
@@ -599,6 +602,18 @@ export default function App() {
             <div className="popover room-popover">
               <div className="popover-heading">WORKSHOPS</div>
               <button
+                disabled={!state.guest}
+                onClick={() => {
+                  cancel();
+                  setRoomMenu(false);
+                  setAiDialog(true);
+                }}
+              >
+                <Sparkles size={16} />
+                Build with AI
+                <ChevronRight size={14} />
+              </button>
+              <button
                 onClick={() =>
                   void newRoom(false).catch((e) => notice(e.message))
                 }
@@ -901,6 +916,7 @@ export default function App() {
             grid={grid}
             quality={quality}
             cameraMode={camera}
+            frameParts={new URLSearchParams(location.search).has("frame")}
             presentation={presentation}
             selectMode={tool === "select"}
             canMove={canEdit && !state.pending.length}
@@ -1202,6 +1218,9 @@ export default function App() {
           <ArrowUpRight size={11} />
         </a>
       </footer>
+      {aiDialog && (
+        <AIBuildDialog theme={theme} onClose={() => setAiDialog(false)} />
+      )}
       {help && (
         <div className="modal-scrim" onClick={() => setHelp(false)}>
           <section

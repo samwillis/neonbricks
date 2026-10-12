@@ -82,8 +82,174 @@ body {
   margin: 0;
 }
 button,
-input {
+input,
+textarea {
   font: inherit;
+}
+.ai-dialog {
+  position: fixed;
+  inset: 0;
+  width: 460px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 20px 100px var(--shadow);
+}
+.ai-dialog[open] {
+  display: grid;
+}
+.ai-dialog.has-preview {
+  width: 950px;
+  grid-template-columns: 410px minmax(0, 1fr);
+}
+.ai-dialog::backdrop {
+  background: var(--scrim);
+  backdrop-filter: blur(4px);
+}
+.ai-copy {
+  padding: 34px 30px 28px;
+}
+.ai-copy h2 {
+  margin: 0 0 9px;
+  font-size: 26px;
+  font-weight: 450;
+  letter-spacing: -0.8px;
+}
+.ai-intro {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 24px;
+}
+.ai-copy textarea {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  padding: 13px;
+  font-size: 13px;
+  line-height: 1.6;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--ink);
+  background: var(--panel);
+}
+.ai-copy textarea::placeholder {
+  color: var(--quiet);
+}
+.ai-copy textarea:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.ai-examples {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+}
+.ai-examples button {
+  display: flex;
+  text-align: left;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.ai-examples button:hover {
+  color: var(--green);
+}
+.ai-status {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.ai-status .spin {
+  color: var(--green);
+}
+.ai-error {
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0 0 16px;
+}
+.ai-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+.ai-actions .primary-button {
+  margin: 0;
+  font-size: 12px;
+  padding: 11px 15px;
+}
+.ai-secondary {
+  font-size: 12px;
+  padding: 9px 0;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.ai-footnote {
+  font-size: 11px;
+  color: var(--quiet);
+  margin: 15px 0 0;
+}
+.ai-preview {
+  position: relative;
+  min-height: 380px;
+  background: var(--stage);
+  border-left: 1px solid var(--line);
+}
+.ai-preview-caption {
+  position: absolute;
+  bottom: 18px;
+  left: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.ai-dialog.has-preview .modal-close {
+  z-index: 2;
+  padding: 5px;
+  border-radius: 4px;
+  background: var(--surface);
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 740px) {
+  .ai-dialog.has-preview {
+    grid-template-columns: minmax(0, 1fr);
+    width: 460px;
+  }
+  .ai-dialog.has-preview .ai-preview {
+    min-height: 270px;
+    height: 270px;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .ai-copy {
+    padding: 28px 24px 24px;
+  }
 }
 button {
   border: 0;

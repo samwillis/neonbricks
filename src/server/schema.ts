@@ -25,6 +25,34 @@ export const worlds = pgTable("worlds", {
     .notNull()
     .defaultNow(),
 });
+export const aiGenerations = pgTable(
+  "ai_generations",
+  {
+    id: uuid().primaryKey(),
+    guest: uuid().notNull(),
+    prompt: text().notNull(),
+    model: text().notNull(),
+    status: text().notNull().default("queued"),
+    attempt: integer().notNull().default(0),
+    blueprint: jsonb(),
+    issues: jsonb(),
+    error: text(),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    world: uuid().references(() => worlds.id),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("ai_generations_guest_created").on(t.guest, t.createdAt),
+    index("ai_generations_status_lease").on(t.status, t.leaseUntil),
+  ],
+);
 export const guests = pgTable("guests", {
   id: uuid().primaryKey(),
   name: text().notNull(),

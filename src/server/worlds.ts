@@ -44,6 +44,37 @@ export async function insertPart(c: PoolClient, world: string, p: Part) {
     ],
   );
 }
+export async function insertWorld(
+  c: PoolClient,
+  title: string,
+  owner: string | null,
+  slug?: string,
+) {
+  const id = randomUUID(),
+    name = slug || randomUUID().slice(0, 8);
+  const { rows } = await c.query(
+    "INSERT INTO worlds(id,slug,title,owner,catalogue) VALUES($1,$2,$3,$4,$5) RETURNING *",
+    [id, name, title, owner, CATALOGUE_VERSION],
+  );
+  const keys: number[][] = [];
+  for (
+    let x = Math.floor((-WORLD_LIMIT - 2) / BUCKET);
+    x <= Math.floor((WORLD_LIMIT + 2) / BUCKET);
+    x++
+  )
+    for (let y = -1; y <= Math.floor((HEIGHT_LIMIT + 2) / BUCKET); y++)
+      for (
+        let z = Math.floor((-WORLD_LIMIT - 2) / BUCKET);
+        z <= Math.floor((WORLD_LIMIT + 2) / BUCKET);
+        z++
+      )
+        keys.push([x, y, z]);
+  await c.query(
+    "INSERT INTO spatial_buckets(world,x,y,z) SELECT $1,x,y,z FROM unnest($2::int[],$3::int[],$4::int[]) AS b(x,y,z)",
+    [id, keys.map((v) => v[0]), keys.map((v) => v[1]), keys.map((v) => v[2])],
+  );
+  return rows[0];
+}
 export async function createWorld(
   title: string,
   owner: string | null,
@@ -51,29 +82,8 @@ export async function createWorld(
   slug?: string,
 ) {
   return transaction(async (c) => {
-    const id = randomUUID(),
-      name = slug || randomUUID().slice(0, 8);
-    const { rows } = await c.query(
-      "INSERT INTO worlds(id,slug,title,owner,catalogue) VALUES($1,$2,$3,$4,$5) RETURNING *",
-      [id, name, title, owner, CATALOGUE_VERSION],
-    );
-    const keys: number[][] = [];
-    for (
-      let x = Math.floor((-WORLD_LIMIT - 2) / BUCKET);
-      x <= Math.floor((WORLD_LIMIT + 2) / BUCKET);
-      x++
-    )
-      for (let y = -1; y <= Math.floor((HEIGHT_LIMIT + 2) / BUCKET); y++)
-        for (
-          let z = Math.floor((-WORLD_LIMIT - 2) / BUCKET);
-          z <= Math.floor((WORLD_LIMIT + 2) / BUCKET);
-          z++
-        )
-          keys.push([x, y, z]);
-    await c.query(
-      "INSERT INTO spatial_buckets(world,x,y,z) SELECT $1,x,y,z FROM unnest($2::int[],$3::int[],$4::int[]) AS b(x,y,z)",
-      [id, keys.map((v) => v[0]), keys.map((v) => v[1]), keys.map((v) => v[2])],
-    );
+    const world = await insertWorld(c, title, owner, slug);
+    const id = world.id;
     const parts = withStarter ? starter(randomUUID) : [];
     for (let i = 0; i < parts.length; i++) {
       if (!validPart(parts[i]))
@@ -88,7 +98,7 @@ export async function createWorld(
     // Import lazily to keep bootstrap independent of the HTTP app.
     const { reconnectParts } = await import("./commands");
     await reconnectParts(c, id, parts, parts, []);
-    return rows[0];
+    return world;
   });
 }
 export async function joinWorld(a: Identity, slug: string) {
