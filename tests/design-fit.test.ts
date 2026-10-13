@@ -13,6 +13,56 @@ const rover = designSchema.parse(
   ),
 );
 describe("bounded AI stud snapping", () => {
+  it("grounds the observed lookout's bushes while leaving its collision repairs to the model", () => {
+    const original = designSchema.parse(
+      JSON.parse(
+        readFileSync(
+          new URL("./fixtures/ai-lookout-fit-errors.json", import.meta.url),
+          "utf8",
+        ),
+      ),
+    );
+    for (const front of ["+z", "-z", "+x", "-x"] as const) {
+      const design = { ...original, front };
+      expect(compileBlueprint(design).issueCounts).toEqual({
+        overlap: 12,
+        unattached: 3,
+      });
+      const fit = snapDesign(design);
+      expect(fit.compiled.issueCounts).toEqual({ overlap: 12 });
+      expect(fit.adjustments).toHaveLength(3);
+      expect(fit.design.pieces.filter((p) => !p.id.startsWith("bush"))).toEqual(
+        design.pieces.filter((p) => !p.id.startsWith("bush")),
+      );
+      expect(
+        fit.design.pieces
+          .filter((p) => p.id.startsWith("bush"))
+          .map((p) => p.at[1]),
+      ).toEqual([0, 0, 0]);
+      expect(fit.compiled.parts).toHaveLength(95);
+    }
+  });
+  it("does not swap an existing overlap for a new one while grounding scenery", () => {
+    const original = designSchema.parse(
+      JSON.parse(
+        readFileSync(
+          new URL("./fixtures/ai-lookout-fit-errors.json", import.meta.url),
+          "utf8",
+        ),
+      ),
+    );
+    const d = {
+      ...original,
+      pieces: original.pieces.map((p) =>
+        p.id === "bush1" ? { ...p, at: [-6, 0.5, 0] } : p,
+      ),
+    };
+    const fit = snapDesign(d);
+    expect(fit.design.pieces.find((p) => p.id === "bush1")).toEqual(
+      d.pieces.find((p) => p.id === "bush1"),
+    );
+    expect(fit.compiled.issueCounts.overlap).toBe(13);
+  });
   it("fixes the observed three-piece antenna without changing the rover", () => {
     for (const front of [undefined, "+z", "-z", "+x", "-x"] as const) {
       const original = { ...rover, front };

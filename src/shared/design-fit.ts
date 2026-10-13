@@ -14,12 +14,17 @@ export function snapDesign(
   let compiled: CompiledBlueprint = checked;
   const adjustments: DesignAdjustment[] = [];
   let evaluations = 0;
-  while (
-    compiled.issues.length &&
-    compiled.issues.every((i) => i.code === "unattached") &&
-    evaluations < 36
-  ) {
-    const missing = new Set(compiled.issues.flatMap((i) => i.parts));
+  while (compiled.issueCounts.unattached && evaluations < 36) {
+    const missing = new Set(
+      compiled.issues
+        .filter((i) => i.code === "unattached")
+        .flatMap((i) => i.parts),
+    );
+    const conflicts = compiled.issues.filter((i) => i.code !== "unattached");
+    const conflictedParts = new Set(conflicts.flatMap((i) => i.parts));
+    const existingConflicts = new Set(
+      conflicts.map((i) => `${i.code}:${[...i.parts].sort().join("/")}`),
+    );
     const graph = new Map(compiled.parts.map((p) => [p.id, new Set<string>()]));
     for (const edge of compiled.edges) {
       graph.get(edge.a)!.add(edge.b);
@@ -50,11 +55,22 @@ export function snapDesign(
             queue.push(id);
           }
       group.forEach((id) => visited.add(id));
+      if ([...group].some((id) => !missing.has(id) || conflictedParts.has(id)))
+        continue;
       const rows = new Set([...group].map((id) => owner.get(id)!));
       if ([...rows].some((id) => members.get(id)!.some((p) => !group.has(p))))
         continue;
       const sockets = connectorList(root).filter((c) => c.type === "socket");
       const offsets = new Map<string, number[]>();
+      // Scenery one plate above bare ground has no nearby stud to catch.
+      // Drop only the whole unsupported component, within the same small bound.
+      const bottom = Math.min(
+        ...compiled.parts
+          .filter((p) => group.has(p.id))
+          .map((p) => bounds(p).miny),
+      );
+      if (bottom > 0 && bottom <= 2)
+        offsets.set(`0,${-bottom},0`, [0, -bottom, 0]);
       for (const target of compiled.parts) {
         if (group.has(target.id) || missing.has(target.id)) continue;
         for (const stud of connectorList(target).filter(
@@ -106,8 +122,20 @@ export function snapDesign(
         };
         const result = compileBlueprint(next);
         if (
-          result.issues.length >= compiled.issues.length ||
-          result.issues.some((i) => i.code !== "unattached")
+          (result.issueCounts.unattached || 0) >=
+            compiled.issueCounts.unattached ||
+          Object.entries(result.issueCounts).some(
+            ([code, count]) =>
+              code !== "unattached" &&
+              count > (compiled.issueCounts[code] || 0),
+          ) ||
+          result.issues.some(
+            (i) =>
+              i.code !== "unattached" &&
+              !existingConflicts.has(
+                `${i.code}:${[...i.parts].sort().join("/")}`,
+              ),
+          )
         )
           continue;
         design = next;

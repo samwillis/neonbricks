@@ -7,6 +7,10 @@ import { AI_BUILDER_VERSION } from "../src/server/ai";
 // authentication, validation and acceptance path. Never retry a failed case here.
 const cases = [
   {
+    id: "lookout",
+    prompt: "A little forest lookout with a red roof",
+  },
+  {
     id: "cabin",
     prompt:
       "A cosy woodland cabin with a red pitched roof, an open doorway, a chimney and a pine tree beside it.",

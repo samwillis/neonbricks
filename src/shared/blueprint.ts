@@ -49,6 +49,7 @@ export type CompiledBlueprint = {
   parts: Part[];
   edges: BlueprintEdge[];
   issues: BlueprintIssue[];
+  issueCounts: Record<string, number>;
 };
 
 // Both the preview and server use this compiler. Attachment coordinates come
@@ -63,7 +64,9 @@ export function compileBlueprint(input: unknown): CompiledBlueprint {
       : input,
   );
   const issues: BlueprintIssue[] = [];
+  const issueCounts: Record<string, number> = {};
   const issue = (code: string, parts: string[], message: string) => {
+    issueCounts[code] = (issueCounts[code] || 0) + 1;
     if (issues.length < 30) issues.push({ code, parts, message });
   };
   const specs = new Map(blueprint.parts.map((p) => [p.id, p]));
@@ -154,7 +157,8 @@ export function compileBlueprint(input: unknown): CompiledBlueprint {
   };
   blueprint.parts.forEach((p) => resolve(p.id));
   const parts = [...resolved.values()];
-  if (issues.length) return { blueprint, parts, edges: [], issues };
+  if (issues.length)
+    return { blueprint, parts, edges: [], issues, issueCounts };
 
   const occupied = new Map<string, string>();
   const clashes = new Set<string>();
@@ -256,7 +260,7 @@ export function compileBlueprint(input: unknown): CompiledBlueprint {
         [p.id],
         "Part has no supported path to the board. Connect it, rest its bottom on a supported surface, or place it on the board.",
       );
-  return { blueprint, parts, edges, issues };
+  return { blueprint, parts, edges, issues, issueCounts };
 }
 
 export function catalogueForAI() {

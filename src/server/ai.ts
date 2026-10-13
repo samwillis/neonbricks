@@ -20,8 +20,13 @@ import {
   applyDesignPatch,
   type Design,
 } from "../shared/design";
-import { bounds } from "../shared/geometry";
 import { snapDesign, type DesignAdjustment } from "../shared/design-fit";
+import { bounds } from "../shared/geometry";
+import {
+  fitScore,
+  fitRepairFeedback,
+  fitFailureMessage,
+} from "../shared/design-repair";
 import { DomainError, lockAccess, type Identity } from "./auth";
 import { pool, transaction } from "./db";
 import { aiBuildErrorMessage } from "./ai-errors";
@@ -47,7 +52,7 @@ export const aiConfiguration = () => ({
   model: model(),
   version: AI_BUILDER_VERSION,
 });
-export const AI_BUILDER_VERSION = "workshop-shared-chat-2";
+export const AI_BUILDER_VERSION = "geometry-repair-1";
 export const aiAvailable = () =>
   !!(process.env.NEON_AI_GATEWAY_TOKEN && process.env.NEON_AI_GATEWAY_BASE_URL);
 const publicColumns =
@@ -287,7 +292,7 @@ export async function recordDrawing(
 
 const system = `You are a skilled brick model designer. Build attractive, recognisable miniature models for Neonbricks.
 Return a version 2 design: title, one-sentence summary, front, pieces. Declare front as +z/-z/+x/-x: the direction toward the main doorway, headlights, face, or other defining details. The compiler rotates the whole model to present that front to the viewer, so this MUST match the actual placements. Each piece has a short unique id, catalogue part, colour, turn, at=[x,y,z], and repeat=null or {count,step:[dx,dy,dz]}. A repeated row expands at at+i*step, keeping its orientation. Use repeat for courses, fence posts, stairs, windows, tree trunks and symmetry. Do not list identical repeated pieces individually. Maximum ${MAX_AI_PARTS} expanded pieces; aim for 40–140 where useful. Small requests can use fewer.
-FIRST plan a coherent silhouette and palette. Choose a few defining features of the requested subject and build those prominently. Make roofs pitched, animal heads and tails readable, vehicle bodies supported, towers detailed. Use contrasting accent colours, a modest base or scenery where helpful, and a finished composition. Avoid random spare pieces or a mound of disconnected blocks. Most detail belongs on your declared front and sides; make it prominent from an isometric view. Doorways, arches and windows must be real openings: never place a solid wall immediately behind an opening. Do not describe details you did not build.
+FIRST plan a coherent silhouette and palette. Choose a few defining features of the requested subject and build those prominently. For a little or small subject, aim for 30–70 pieces, keeping optional scenery modest; add more only when the requested features need it. Plan support levels, wall openings and stair landings before adding detail. Make roofs pitched, animal heads and tails readable, vehicle bodies supported, towers detailed. Use contrasting accent colours, a modest base or scenery where helpful, and a finished composition. Avoid random spare pieces or a mound of disconnected blocks. Most detail belongs on your declared front and sides; make it prominent from an isometric view. Doorways, arches and windows must be real openings: never place a solid wall immediately behind an opening. Do not describe details you did not build.
 Units: x/z studs; y plate heights. One brick=3 plates. at is the minimum corner of the ROTATED bounding box. turn=0/1/2/3 is yaw only; odd turns swap width/depth. brick-1x4 turn=0 is 1 along x, 4 along z; turn=1 is 4 along x, 1 along z. Board x/z=-16..16, y=0..48. Build near centre; prefer integer coordinates. Keep the entire rotated shape inside these bounds.
 Fit: parts may not overlap. Each part must connect to or rest on a supported part, with a path to the board. Studs are at cell centres; stack at the lower part's y+height, aligning integer x/z studs. Add roof plates over supporting walls, then slopes. Tiles/slopes have no studs above; do not float parts above them. Window frames are 3 wide, 1 deep, 6 high; leave a matching hole in the wall. Arches are 4 wide,1 deep,6 high with an open centre. Wall corners belong to only one wall. Chimneys need a real roof gap. A bridge can span a gap if connected at an end. A balcony needs an actual connection or support. Only yaw: horizontal pieces cannot be rotated vertically. Use stepped brick forms for vertical details.
 Mechanical shortcuts are verified multi-piece assemblies, with the same placement/repeat fields. Prefer four-wheel-chassis for vehicles: its body platform top is at y=8, within x=1..5,z=2..6 relative to origin. Add a hood, supported cockpit, headlights and antenna; keep the antenna foot inside the roof footprint. Use wheel-axle for custom wheel fits, rather than guessing axle offsets. A wheel-axle has two tyres and two bearing mounts; a body may rest on bearing tops. Two turn=1 wheel-axles spaced along z make a four-wheel chassis. At turn=1 its size is 6 along x,3 along z; bearings top at y=6, in x=1..2 and 4..5,z=1..2 relative to assembly origin. Keep chassis x within 1..5 to clear tyres. A plate-2x4 at turn=1 is 4 along x and2 along z: at [originX+1,originY+6,originZ+0.5] makes a supported cross-deck. Keep the remainder of the body above that deck. All mechanics are static. Do not promise animation, motors or unsupported rotations.
@@ -317,6 +322,11 @@ type CandidateAttempt = {
   elapsedMs?: number;
   issues?: unknown;
   adjustments?: DesignAdjustment[];
+  issueCounts?: Record<string, number>;
+  bestBlueprint?: unknown;
+  bestIssues?: CompiledBlueprint["issues"];
+  bestIssueCounts?: Record<string, number>;
+  retainedPrevious?: boolean;
 };
 export async function recordGenerationAttempt(
   id: string,
@@ -324,25 +334,34 @@ export async function recordGenerationAttempt(
   stage: string,
   result?: CandidateAttempt,
 ) {
+  const issues = result?.bestIssues || result?.issues;
+  const counts = result?.bestIssueCounts || result?.issueCounts;
+  const count = counts
+    ? Object.values(counts).reduce((sum, n) => sum + n, 0)
+    : Array.isArray(issues)
+      ? issues.length
+      : 0;
   const update = await pool.query(
     "UPDATE ai_generations SET status=$2,attempt=$3::int,blueprint=COALESCE($4::jsonb,blueprint),issues=$5::jsonb,input_tokens=input_tokens+$6,output_tokens=output_tokens+$7,attempts=CASE WHEN $4::jsonb IS NULL THEN attempts ELSE attempts||jsonb_build_object(($3::int)::text,$9::jsonb) END,activity=$10,updated_at=clock_timestamp() WHERE id=$1 AND status=ANY($8::text[]) RETURNING id",
     [
       id,
       stage,
       attempt,
-      result ? JSON.stringify(result.blueprint) : null,
-      result?.issues ? JSON.stringify(result.issues) : null,
+      result ? JSON.stringify(result.bestBlueprint || result.blueprint) : null,
+      issues ? JSON.stringify(issues) : null,
       result?.inputTokens || 0,
       result?.outputTokens || 0,
       running,
       result ? JSON.stringify(result) : null,
-      result && Array.isArray(result.issues) && result.issues.length
-        ? `Found ${result.issues.length} fit ${result.issues.length === 1 ? "issue" : "issues"}; adjusting the design`
-        : stage === "checking"
-          ? "Checking collisions and connections"
-          : attempt > 1
-            ? `Adjusting the design · pass ${attempt}`
-            : "Designing the model",
+      result?.retainedPrevious
+        ? "Keeping the better draft; trying a different repair"
+        : count
+          ? `Found ${count} fit ${count === 1 ? "issue" : "issues"}; adjusting the design`
+          : stage === "checking"
+            ? "Checking collisions and connections"
+            : attempt > 1
+              ? `Adjusting the design · pass ${attempt}`
+              : "Designing the model",
     ],
   );
   return !!update.rows[0];
@@ -373,7 +392,13 @@ export const generateCandidate: GenerateCandidate = async (
       maxOutputTokens: 12000,
       maxRetries: 0,
       providerOptions: modelId.startsWith("gpt-")
-        ? { openai: { reasoningEffort: "low" } }
+        ? {
+            openai: {
+              reasoningEffort: repair.startsWith("\nFIT REPAIR")
+                ? "medium"
+                : "low",
+            },
+          }
         : undefined,
       abortSignal: signal,
       onError: ({ error }) => {
@@ -446,6 +471,7 @@ export async function buildCandidate(
   let repair = reference
     ? `\nRefine this reference model, applying the user's changes and preserving unaffected features: ${JSON.stringify(reference)}`
     : "";
+  let best: { compiled: CompiledBlueprint; design?: Design } | undefined;
   for (let attempt = 1; attempt <= 3; attempt++) {
     signal.throwIfAborted();
     await report(attempt, attempt === 1 ? "designing" : "repairing");
@@ -459,6 +485,7 @@ export async function buildCandidate(
     signal.throwIfAborted();
     await report(attempt, "checking");
     let compiled: CompiledBlueprint;
+    let candidateDesign: Design | undefined;
     try {
       if (source) result.blueprint = applyDesignPatch(source, result.blueprint);
       if (
@@ -467,13 +494,13 @@ export async function buildCandidate(
         "version" in result.blueprint &&
         result.blueprint.version === 2
       )
-        source = designSchema.parse(result.blueprint);
+        candidateDesign = designSchema.parse(result.blueprint);
       compiled = compileBlueprint(result.blueprint);
-      if (source && compiled.issues.length) {
-        const fitted = snapDesign(source, compiled);
-        source = fitted.design;
+      if (candidateDesign && compiled.issues.length) {
+        const fitted = snapDesign(candidateDesign, compiled);
+        candidateDesign = fitted.design;
         compiled = fitted.compiled;
-        result.blueprint = source;
+        result.blueprint = candidateDesign;
         result.adjustments = fitted.adjustments;
       }
     } catch (error) {
@@ -490,36 +517,34 @@ export async function buildCandidate(
       await report(attempt, "checking", {
         ...result,
         issues: [{ code: "schema", parts: [], message: feedback }],
+        bestBlueprint: best?.design || best?.compiled.blueprint,
+        bestIssues: best?.compiled.issues,
+        bestIssueCounts: best?.compiled.issueCounts,
+        retainedPrevious: !!best,
       });
-      repair = `\nYour previous design failed validation: ${feedback}.${source ? `\nPrevious design: ${JSON.stringify(source)}\nReturn a corrected patch.` : " Return a complete corrected version 2 design."}`;
+      repair = `\nFIT REPAIR: your previous output failed validation: ${feedback}.${source ? `\nPrevious design: ${JSON.stringify(source)}\nReturn a corrected patch.` : " Return a complete corrected version 2 design."}`;
+      if (best) repair += fitRepairFeedback(best.compiled, best.design, true);
       continue;
     }
+    const retainedPrevious =
+      !!best && fitScore(compiled) >= fitScore(best.compiled);
+    if (!retainedPrevious) best = { compiled, design: candidateDesign };
+    const chosen = best!;
     await report(attempt, "checking", {
       ...result,
       issues: compiled.issues,
+      issueCounts: compiled.issueCounts,
+      bestBlueprint: chosen.design || chosen.compiled.blueprint,
+      bestIssues: chosen.compiled.issues,
+      bestIssueCounts: chosen.compiled.issueCounts,
+      retainedPrevious,
     });
-    if (!compiled.issues.length) return { ...compiled, design: source };
-    const affected = new Set(compiled.issues.flatMap((i) => i.parts));
-    const feedbackParts =
-      source?.front && source.front !== "+z"
-        ? compileBlueprint({ ...source, front: "+z" }).parts
-        : compiled.parts;
-    const extents = feedbackParts
-      .filter((p) => affected.has(p.id))
-      .map((p) => {
-        const b = bounds(p);
-        return {
-          id: p.id,
-          x: [b.minx / 6, b.maxx / 6],
-          y: [b.miny / 2, b.maxy / 2],
-          z: [b.minz / 6, b.maxz / 6],
-        };
-      });
-    repair = `\nPrevious design: ${JSON.stringify(result.blueprint)}\nActual affected extents in studs/plates: ${JSON.stringify(extents)}\nValidation errors: ${JSON.stringify(compiled.issues)}\nFix the original rows that produced these pieces; check rotated dimensions, course heights and supporting surfaces. ${source ? "Return only a patch; keep unaffected rows." : "Return the complete corrected version 2 design."}`;
+    if (!compiled.issues.length)
+      return { ...compiled, design: candidateDesign };
+    source = chosen.design;
+    repair = fitRepairFeedback(chosen.compiled, source, retainedPrevious);
   }
-  throw new DomainError(
-    "I couldn't get all the pieces to fit. Try a simpler description or build again.",
-  );
+  throw new DomainError(fitFailureMessage(best?.compiled));
 }
 
 export async function runGeneration(a: Identity, id: string) {

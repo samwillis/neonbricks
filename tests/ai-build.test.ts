@@ -90,17 +90,15 @@ describe("AI generation repair loop", () => {
         },
       ],
     };
-    const generate = vi
-      .fn()
-      .mockResolvedValue(
-        candidate({
-          title: null,
-          summary: "A blue-roofed tower",
-          changes: [
-            { id: "roof", row: { ...design.pieces[1], colour: "cobalt" } },
-          ],
-        }),
-      );
+    const generate = vi.fn().mockResolvedValue(
+      candidate({
+        title: null,
+        summary: "A blue-roofed tower",
+        changes: [
+          { id: "roof", row: { ...design.pieces[1], colour: "cobalt" } },
+        ],
+      }),
+    );
     const b = await buildCandidate(
       "Make its roof blue",
       "test",
@@ -158,8 +156,127 @@ describe("AI generation repair loop", () => {
         generate,
         vi.fn(),
       ),
-    ).rejects.toThrow("couldn't get all the pieces to fit");
+    ).rejects.toThrow("1 piece without support after three design passes");
     expect(generate).toHaveBeenCalledTimes(3);
+  });
+  it("rejects a worse patch and repairs the best design, while recording all usage", async () => {
+    const design = {
+      version: 2,
+      title: "Tower",
+      summary: "A tower",
+      front: "+z",
+      pieces: [
+        {
+          id: "base",
+          part: "brick-2x2",
+          colour: "jade",
+          turn: 0,
+          at: [0, 0, 0],
+          repeat: null,
+        },
+        {
+          id: "cap",
+          part: "brick-2x2",
+          colour: "poppy",
+          turn: 0,
+          at: [0, 6, 0],
+          repeat: null,
+        },
+      ],
+    };
+    const generate = vi
+      .fn()
+      .mockResolvedValueOnce(candidate(design))
+      .mockResolvedValueOnce(
+        candidate({
+          title: null,
+          summary: null,
+          changes: [
+            { id: "base", row: { ...design.pieces[0], at: [0, 6, 0] } },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        candidate({
+          title: null,
+          summary: null,
+          changes: [{ id: "cap", row: { ...design.pieces[1], at: [0, 3, 0] } }],
+        }),
+      );
+    const report = vi.fn();
+    const built = await buildCandidate(
+      "Tower",
+      "test",
+      new AbortController().signal,
+      generate,
+      report,
+    );
+    expect(built.issues).toEqual([]);
+    expect(generate.mock.calls[2][4]).toEqual(design);
+    expect(generate.mock.calls[2][1]).toContain("was discarded");
+    const rejected = report.mock.calls.find((c) => c[0] === 2 && c[2]);
+    expect(rejected?.[2].retainedPrevious).toBe(true);
+    expect(rejected?.[2].issueCounts.overlap).toBe(1);
+    expect(rejected?.[2].bestIssueCounts).toEqual({ unattached: 1 });
+    expect(
+      report.mock.calls.reduce((n, c) => n + (c[2]?.inputTokens || 0), 0),
+    ).toBe(30);
+  });
+  it("keeps the repair baseline when a patch fails expansion", async () => {
+    const design = {
+      version: 2,
+      title: "Tower",
+      summary: "",
+      pieces: [
+        {
+          id: "tower",
+          part: "brick-2x2",
+          colour: "jade",
+          turn: 0,
+          at: [0, 6, 0],
+          repeat: null,
+        },
+      ],
+    };
+    const generate = vi
+      .fn()
+      .mockResolvedValueOnce(candidate(design))
+      .mockResolvedValueOnce(
+        candidate({
+          title: null,
+          summary: null,
+          changes: [
+            {
+              id: "tooBig",
+              row: {
+                ...design.pieces[0],
+                id: "tooBig",
+                part: "pine-tree",
+                repeat: { count: 32, step: [1, 0, 0] },
+              },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        candidate({
+          title: null,
+          summary: null,
+          changes: [
+            { id: "tower", row: { ...design.pieces[0], at: [0, 0, 0] } },
+          ],
+        }),
+      );
+    const built = await buildCandidate(
+      "Tower",
+      "test",
+      new AbortController().signal,
+      generate,
+      vi.fn(),
+    );
+    expect(built.issues).toEqual([]);
+    expect(generate.mock.calls[2][4]).toEqual(design);
+    expect(built.parts).toHaveLength(1);
   });
   it("repairs schema errors and honours cancellation before more inference", async () => {
     const generate = vi

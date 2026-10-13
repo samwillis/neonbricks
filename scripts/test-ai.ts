@@ -155,6 +155,36 @@ try {
     assert.equal(recorded.input_tokens, 11);
     assert.equal(recorded.output_tokens, 22);
     assert.deepEqual(recorded.attempts["1"].blueprint, fixture);
+    const rejected = { ...fixture, title: "Rejected collision fixture" };
+    assert.equal(
+      await recordGenerationAttempt(job.id, 2, "checking", {
+        blueprint: rejected,
+        inputTokens: 13,
+        outputTokens: 17,
+        issues: [
+          { code: "overlap", parts: ["base", "body"], message: "Collision" },
+        ],
+        issueCounts: { overlap: 1 },
+        bestBlueprint: fixture,
+        bestIssues: [],
+        bestIssueCounts: {},
+        retainedPrevious: true,
+      }),
+      true,
+    );
+    const retained = (
+      await pool.query(
+        "SELECT blueprint,issues,input_tokens,output_tokens,attempts,activity FROM ai_generations WHERE id=$1",
+        [job.id],
+      )
+    ).rows[0];
+    assert.deepEqual(retained.blueprint, fixture);
+    assert.deepEqual(retained.issues, []);
+    assert.deepEqual(retained.attempts["2"].blueprint, rejected);
+    assert.equal(retained.attempts["2"].retainedPrevious, true);
+    assert.equal(retained.input_tokens, 24);
+    assert.equal(retained.output_tokens, 39);
+    assert.match(retained.activity, /Keeping the better draft/);
     await sub.awaitRows(
       (rows) => rows.some((r) => r.status === "checking"),
       20000,
