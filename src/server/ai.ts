@@ -24,6 +24,7 @@ import { bounds } from "../shared/geometry";
 import { snapDesign, type DesignAdjustment } from "../shared/design-fit";
 import { DomainError, type Identity } from "./auth";
 import { pool, transaction } from "./db";
+import { aiBuildErrorMessage } from "./ai-errors";
 import { insertWorld } from "./worlds";
 import { rawSql } from "@neon/realtime/server";
 
@@ -37,7 +38,7 @@ export const aiConfiguration = () => ({
   model: model(),
   version: AI_BUILDER_VERSION,
 });
-export const AI_BUILDER_VERSION = "design-v2-patches-3";
+export const AI_BUILDER_VERSION = "design-v2-patches-4";
 export const aiAvailable = () =>
   !!(process.env.NEON_AI_GATEWAY_TOKEN && process.env.NEON_AI_GATEWAY_BASE_URL);
 const publicColumns =
@@ -89,7 +90,7 @@ export async function createGeneration(
     throw new DomainError("AI building is not configured yet", 503);
   await expireGenerations();
   await transaction(async (c) => {
-    // This lock only serializes AI budget reservations, never workshop edits.
+    // This lock only serializes AI concurrency admission, never workshop edits.
     await c.query("SELECT pg_advisory_xact_lock(729411)");
     const existing = await c.query(
       "SELECT guest,prompt,source::text FROM ai_generations WHERE id=$1",
@@ -105,25 +106,10 @@ export async function createGeneration(
       return;
     }
     const { rows } = await c.query(
-      "SELECT count(*) FILTER(WHERE created_at>clock_timestamp()-interval '1 day')::int AS daily,count(*) FILTER(WHERE guest=$1 AND created_at>clock_timestamp()-interval '1 hour')::int AS personal,count(*) FILTER(WHERE status=ANY($2::text[]))::int AS active,count(*) FILTER(WHERE guest=$1 AND status=ANY($2::text[]))::int AS personal_active FROM ai_generations WHERE created_at>clock_timestamp()-interval '1 day' OR status=ANY($2::text[])",
+      "SELECT count(*)::int AS active,count(*) FILTER(WHERE guest=$1)::int AS personal_active FROM ai_generations WHERE status=ANY($2::text[])",
       [a.guest, active],
     );
     const limits = rows[0];
-    const configuredLimit = Number(process.env.AI_DAILY_LIMIT || 40);
-    const dailyLimit =
-      Number.isSafeInteger(configuredLimit) && configuredLimit > 0
-        ? configuredLimit
-        : 40;
-    if (limits.daily >= dailyLimit)
-      throw new DomainError(
-        "Today's AI building budget has been used. Please come back later.",
-        429,
-      );
-    if (limits.personal >= 8)
-      throw new DomainError(
-        "You've made several AI builds recently. Please try again in an hour.",
-        429,
-      );
     if (limits.personal_active)
       throw new DomainError("You already have a build in progress", 429);
     if (limits.active >= 2)
@@ -408,14 +394,7 @@ export async function runGeneration(a: Identity, id: string) {
     );
   } catch (error) {
     const statusCode = (error as { statusCode?: number }).statusCode;
-    const message =
-      error instanceof DomainError
-        ? error.message
-        : signal.aborted
-          ? "This build was interrupted. Please try again."
-          : statusCode === 429
-            ? "AI Gateway is busy or has reached its budget. Please try again later."
-            : "AI couldn't finish this build. Please try again.";
+    const message = aiBuildErrorMessage(error, signal.aborted);
     console.error(
       "[ai-build]",
       id,

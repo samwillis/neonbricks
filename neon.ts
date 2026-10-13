@@ -23,7 +23,6 @@ export default defineConfig({
         REALTIME_URL: process.env.REALTIME_URL!,
         ALLOWED_ORIGINS: origins.join(","),
         AI_MODEL: process.env.AI_MODEL || "gpt-5-4",
-        AI_DAILY_LIMIT: process.env.AI_DAILY_LIMIT || "40",
       },
     },
   },

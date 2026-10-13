@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { pool } from "../src/server/db";
 import { AI_BUILDER_VERSION } from "../src/server/ai";
 
-// Fixed, inspectable cases. Every request uses the application's normal budget,
+// Fixed, inspectable cases. Every request uses Neon's Gateway spending policy,
 // authentication, validation and acceptance path. Never retry a failed case here.
 const cases = [
   {

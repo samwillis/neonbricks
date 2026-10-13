@@ -111,9 +111,9 @@ Acceptance revalidates the canonical blueprint and current session, locks the ge
 
 `neon.ts` declares `aiGateway: true`. Neon supplies `NEON_AI_GATEWAY_BASE_URL` and `NEON_AI_GATEWAY_TOKEN` to the Function. For local development, pull them with `npm run neon -- env pull --service ai-gateway --file .env.local`. Keep that file private. The Function uses `@neon/ai-sdk-provider` and AI SDK structured output.
 
-`AI_MODEL` defaults to `gpt-5-4` and selects the Gateway model. Verify availability on the linked staging branch before changing it. `AI_DAILY_LIMIT` defaults to 40 reservations per rolling 24 hours, with two active jobs globally, one per guest and eight requests per guest per hour. A short AI-specific advisory lock serializes budget reservations. Workshop editing uses different locks. Refinements consume the same reservation budget as initial builds.
+`AI_MODEL` defaults to `gpt-5-4` and selects the Gateway model. Verify availability on the linked staging branch before changing it. The app has no daily or hourly request-count allowance. Neon AI Gateway prepaid credits and spending policy control the budget. Admission permits two active jobs globally and one per guest. A short AI-specific advisory lock serializes concurrency admission. Workshop editing uses different locks.
 
-Cancelled and interrupted builds still consume their reservation. Providers can charge for inference already performed. Request/token limits do not guarantee a dollar bill; Gateway access, credits and the desired spending policy need separate qualification.
+Providers can charge for inference already performed, including cancelled and interrupted builds. The app shows a budget message only when a Gateway error explicitly identifies depleted credits or an exceeded spending limit. A generic HTTP 429, token-per-minute limit or daily token limit shows a separate busy message. Budget exhaustion does not imply a midnight reset: prepaid credits may need topping up in Neon. Per-build token and deadline bounds remain in place.
 
 The health response includes `aiBuilder`, a source-version marker. Deployment can report completion while the previous Function still serves requests briefly. The benchmark checks both the marker and the model configuration before reserving paid work, with cache-bypassed checks. API responses declare `Cache-Control: no-store`.
 

@@ -122,9 +122,15 @@ These observations produced three further changes: explicit front metadata with 
 
 On builder `design-v2-patches-3`, the same rover prompt passed through the production UI in 49.4 seconds, with 31 pieces, three calls and 6,026 output tokens. The preview shows four fitted wheels, a readable cockpit, headlights and antenna. This candidate needed model repairs but no automatic snaps. The UI verified an update rejected by the daily budget keeps the 31-piece preview available, and closing/reloading restores that preview even when the newer reservation has no server record. The original user workshop was preserved.
 
-All 86 unit tests and the production build pass. The updated windmill assembly, new-generation doorway orientation and successful paid refinement still need further live qualification; their deterministic geometry/patch tests pass. The staging 40-request allowance has been reached. Automatic approval review rejected raising it to 50 without additional user approval; the existing limit was retained and the additional testing request is pending.
+All 86 unit tests and the production build pass. The updated windmill assembly, new-generation doorway orientation and successful paid refinement still need further live qualification; their deterministic geometry/patch tests pass. The staging 40-request allowance was reached during this run. Automatic approval review rejected raising it to 50 without additional user approval; the existing limit was retained for that run. The later budget-policy change below supersedes that allowance.
 
 Current results remain small samples. Raw comparisons are under ignored `artifacts/ai-benchmark-baseline`, `artifacts/ai-benchmark-compact-low`, `artifacts/ai-benchmark-sonnet-v2`, `artifacts/ai-benchmark-gpt-v2` (actually Sonnet during rollout), and `artifacts/ai-benchmark-gpt-final`. The successful v3 rover diagnostics are `artifacts/ai-rover-v3.json`; its preview is `artifacts/ai-rover-v3-preview.png`. These checks improve the demonstrated examples but do not establish a general success rate, public launch readiness or a cost/latency promise.
+
+## AI Gateway budget policy — October 13
+
+At the user's request, builder `design-v2-patches-4` removes the application's daily and hourly request-count quotas. Neon prepaid credits and Gateway spending policy now control spending. The two-job global and one-job-per-guest concurrency controls remain, along with per-build token and deadline bounds. Financial error details trigger the budget message; generic 429s, token rate limits and daily token limits show a busy message instead.
+
+All 96 unit tests and the production build pass. The deployed no-inference lifecycle regression passes, including reserving a refinement after 41 recent completed fixtures for the same guest, alongside the retained paid-generation records. It also verifies the existing per-guest concurrency rejection. The first live attempt hit the previous Function during rollout; the rerun passed after normal and cache-bypassed health requests reported the new version. Synthetic fixture records were removed; paid generation records and existing workshops were preserved. No inference calls or credit purchases were made to test this change. Budget error mapping is covered with SDK error fixtures, including Neon's documented spending-limit and token-rate-limit envelopes; an actual depleted-credit response was not induced.
 
 ## Remaining public-release work
 
@@ -133,7 +139,7 @@ Current results remain small samples. Raw comparisons are under ignored `artifac
 - Include continuous preview and cursor traffic, cold wake-up, and client memory/subscription growth in final capacity and long-session qualification.
 - Rehearse recovery from a prior compatible application release once this first runnable baseline has a successor.
 - Add edge-level abuse control for anonymous session and room creation, and settle long-term storage pruning and ownership recovery. This staging demo does not claim those production policies are complete.
-- Qualify AI cost, success rate and concurrency for the intended audience, and enforce the desired Gateway spending policy. Current request limits bound this staging demo; they do not establish a public service budget.
+- Qualify AI cost, success rate and concurrency for the intended audience, and enforce the desired Gateway spending policy. Per-build token/deadline bounds and concurrency admission do not establish a public service budget.
 - Run the five-visitor first-minute usability study and the 5,000-part growth test.
 - Measure command dispatch to a peer's actual painted frame if the launch makes a browser-render visibility claim. The capacity script measures authoritative SDK delivery.
 - Qualify the intended public audience's hardware and network. Current rendering evidence comes from an M4 Max.

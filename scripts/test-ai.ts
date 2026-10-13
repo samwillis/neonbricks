@@ -173,6 +173,14 @@ try {
       ),
     );
     assert.equal(new Set(accepted.map((w) => w.slug)).size, 1);
+    // Completed requests never block a new build, even beyond the old global
+    // daily and per-guest hourly quotas. These synthetic rows make no inference.
+    const completedIds = Array.from({ length: 41 }, () => randomUUID());
+    records.push(...completedIds);
+    await pool.query(
+      "INSERT INTO ai_generations(id,guest,prompt,model,status) SELECT id,$2,'Completed quota regression fixture','test','cancelled' FROM unnest($1::uuid[]) AS id",
+      [completedIds, a.guest],
+    );
     const revisionId = randomUUID();
     records.push(revisionId);
     const revision = {
@@ -306,7 +314,7 @@ try {
       "failed",
     );
     console.log(
-      "AI lifecycle passed: authenticated access, Realtime stages, quotas, concurrent acceptance, topology, normal edits, cancellation, validation rollback, interruption recovery.",
+      "AI lifecycle passed: authenticated access, Realtime stages, concurrency admission, no completed-request quotas, concurrent acceptance, topology, normal edits, cancellation, validation rollback, interruption recovery.",
     );
   }
   if (
