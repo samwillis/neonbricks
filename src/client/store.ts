@@ -15,9 +15,14 @@ import type {
   Position,
   Edit,
   Receipt,
-  AIGenerationProgress,
   AIConversationRow,
+  Member,
 } from "../shared/types";
+import {
+  openLiveQuery,
+  type QueryState,
+  type QuerySnapshot,
+} from "./live-query";
 import { sceneEntity } from "../shared/types";
 type Pending = {
   id: string;
@@ -37,6 +42,8 @@ type State = {
   color: string;
   canReset: boolean;
   canBuildAI: boolean;
+  role: string | null;
+  queries: Record<"presence" | "history" | "member", QueryState>;
   pending: Pending[];
   history: { undo: string | null; redo: string | null };
   lastTx: string | null;
@@ -54,6 +61,12 @@ let state: State = {
   color: COLORS[0].hex,
   canReset: false,
   canBuildAI: false,
+  role: null,
+  queries: {
+    presence: { status: "connecting" },
+    history: { status: "connecting" },
+    member: { status: "connecting" },
+  },
   pending: [],
   history: { undo: null, redo: null },
   lastTx: null,
@@ -79,15 +92,18 @@ let viewer = "",
   sequence = 0,
   client: ReturnType<typeof createRealtimeClient> | undefined,
   scene: MaterializedLiveQuerySubscription<SceneRow> | undefined;
+let startAbort: AbortController | undefined;
 let disposed = false,
   epoch = 0,
-  renewTimers = new Set<ReturnType<typeof setTimeout>>(),
+  subscriptions = new Set<() => void>(),
   heartTimer: ReturnType<typeof setInterval> | undefined,
   sessionTimer: ReturnType<typeof setInterval> | undefined;
 let clock = { server: Date.now(), mono: performance.now() };
 export const serverNow = () => clock.server + performance.now() - clock.mono;
 export const getViewerId = () => viewer;
 let rejoining = false;
+let liveHistory:
+  { undo: string | null; redo: string | null; generation: number } | undefined;
 let intent: {
     preview: Preview | null;
     selection: string[];
@@ -110,7 +126,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...init.headers,
       },
-      signal: init.signal || AbortSignal.timeout(20_000),
+      signal: init.signal
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(20_000)])
+        : AbortSignal.timeout(20_000),
     });
   const data = await response.json();
   if (!response.ok) {
@@ -135,92 +153,67 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 export function notice(message: string | null) {
   publish({ error: message });
 }
-export async function watchGeneration(
-  id: string,
-  receive: (row: AIGenerationProgress) => void,
-) {
-  if (!client)
-    throw new Error("Wait for the workshop to connect, then try again.");
-  const capability = await api<SealedLiveQuery<AIGenerationProgress>>(
-    `/ai/generations/${id}/live`,
-  );
-  const sub = client.subscribe(capability);
-  const off = sub.onChange((snapshot) => {
-    if (snapshot.data?.[0]) receive(snapshot.data[0]);
-  });
-  let stopped = false;
-  const timer = setInterval(() => {
-    void api<SealedLiveQuery<AIGenerationProgress>>(
-      `/ai/generations/${id}/live`,
-    )
-      .then((next) => {
-        if (!stopped) return sub.renew(next);
-      })
-      .catch(() => {});
-  }, 40_000);
-  return () => {
-    stopped = true;
-    clearInterval(timer);
-    off();
-    sub.unsubscribe();
-  };
-}
 export async function watchConversation(
   world: string,
-  receive: (rows: readonly AIConversationRow[]) => void,
-  reportError: (message: string) => void,
+  receive: (snapshot: QuerySnapshot<AIConversationRow>) => void,
+  signal?: AbortSignal,
 ) {
   if (!client)
     throw new Error("Wait for the workshop to connect, then try again.");
-  const currentClient = client;
-  let capability = await api<SealedLiveQuery<AIConversationRow>>(
-    `/worlds/${world}/live/ai`,
-  );
-  const sub = currentClient.subscribe(capability);
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const off = sub.onChange((snapshot) => {
-    if (stopped) return;
-    if (snapshot.status === "live") receive(snapshot.data || []);
-    else if (snapshot.error) reportError(snapshot.error.message);
+  const currentClient = client,
+    run = epoch;
+  const live = await openLiveQuery({
+    client: currentClient,
+    fetchQuery: (refreshSignal) =>
+      api<SealedLiveQuery<AIConversationRow>>(`/worlds/${world}/live/ai`, {
+        signal: signal
+          ? AbortSignal.any([signal, refreshSignal])
+          : refreshSignal,
+      }),
+    now: serverNow,
+    active: () =>
+      !disposed &&
+      run === epoch &&
+      client === currentClient &&
+      !signal?.aborted,
+    receive,
   });
-  const schedule = (delay: number) => {
-    timer = setTimeout(() => void renew(), delay);
+  const stop = () => {
+    live.stop();
+    subscriptions.delete(stop);
+    signal?.removeEventListener("abort", stop);
   };
-  const renew = async () => {
-    try {
-      const next = await api<SealedLiveQuery<AIConversationRow>>(
-        `/worlds/${world}/live/ai`,
-      );
-      if (stopped) return;
-      await sub.renew(next);
-      capability = next;
-      schedule(Math.max(1000, capability.expiresAt - serverNow() - 12000));
-    } catch (e) {
-      if (stopped) return;
-      if ([401, 403].includes((e as { status?: number }).status || 0)) {
-        receive([]);
-        reportError((e as Error).message);
-        return;
-      }
-      schedule(1000);
-    }
-  };
-  schedule(Math.max(1000, capability.expiresAt - serverNow() - 12000));
-  return () => {
-    stopped = true;
-    clearTimeout(timer);
-    off();
-    sub.unsubscribe();
-  };
-}
-async function history() {
-  if (!state.world) return;
-  try {
-    publish({ history: await api(`/worlds/${state.world.id}/history`) });
-  } catch {}
+  subscriptions.add(stop);
+  signal?.addEventListener("abort", stop, { once: true });
+  if (signal?.aborted) stop();
+  return stop;
 }
 export async function start(slug: string) {
+  startAbort?.abort();
+  const abort = new AbortController();
+  startAbort = abort;
+  subscriptions.forEach((off) => off());
+  subscriptions.clear();
+  client?.close();
+  clearInterval(heartTimer);
+  clearInterval(sessionTimer);
+  publish({
+    status: "connecting",
+    error: null,
+    role: null,
+    canBuildAI: false,
+    canReset: false,
+    history: { undo: null, redo: null },
+    pending: [],
+    viewers: [],
+    parts: [],
+    connections: [],
+    queries: {
+      presence: { status: "connecting" },
+      history: { status: "connecting" },
+      member: { status: "connecting" },
+    },
+  });
   disposed = false;
   const run = ++epoch,
     active = () => !disposed && run === epoch;
@@ -228,15 +221,9 @@ export async function start(slug: string) {
   presenceTimer = undefined;
   presenceFlight = null;
   sequence = 0;
+  liveHistory = undefined;
   lastIntent = "";
   intent = { preview: null, selection: [], cursor: null };
-  const schedule = (callback: () => void, delay: number) => {
-    const timer = setTimeout(() => {
-      renewTimers.delete(timer);
-      if (active()) callback();
-    }, delay);
-    renewTimers.add(timer);
-  };
   try {
     if (!token) {
       const name = `Builder ${Math.floor(Math.random() * 900 + 100)}`,
@@ -244,14 +231,20 @@ export async function start(slug: string) {
       const session = await api<{ token: string }>("/session", {
         method: "POST",
         body: JSON.stringify({ name, color }),
+        signal: abort.signal,
       });
+      if (!active()) return;
       token = session.token;
       sessionStorage.setItem("neon-bricks-session", token);
     }
     let joined: any;
     try {
-      joined = await api(`/worlds/${slug}/join`, { method: "POST" });
+      joined = await api(`/worlds/${slug}/join`, {
+        method: "POST",
+        signal: abort.signal,
+      });
     } catch (e) {
+      if (!active()) return;
       if ((e as any).status === 401) {
         token = "";
         sessionStorage.removeItem("neon-bricks-session");
@@ -266,8 +259,7 @@ export async function start(slug: string) {
       guest: joined.guest,
       name: joined.name,
       color: joined.color,
-      canReset: joined.canReset,
-      canBuildAI: joined.canBuildAI === true,
+      // Permissions are enabled only after live member metadata arrives.
     });
     const url = import.meta.env.VITE_NEON_REALTIME_URL;
     if (!url) throw new Error("Realtime URL is missing. Check .env.local.");
@@ -276,107 +268,145 @@ export async function start(slug: string) {
       kind: string,
       receive: (data: readonly T[], status: string, error?: string) => void,
     ) => {
-      let capability = await api<SealedLiveQuery<T>>(
-        `/worlds/${joined.world.id}/live/${kind}`,
-      );
-      const sub = client!.subscribe(capability);
-      sub.onChange((snapshot) => {
-        if (active())
-          receive(
-            snapshot.data || [],
-            snapshot.status,
-            snapshot.error?.message,
-          );
-      });
-      const renew = async () => {
-        try {
-          capability = await api(`/worlds/${joined.world.id}/live/${kind}`);
-          if (!active()) return;
-          await sub.renew(capability);
-          scheduleRenewal();
-        } catch (e) {
-          if (!active()) return;
-          if ((e as any).status === 401 || (e as any).status === 403) {
-            publish({ status: "error", error: (e as Error).message });
-            return;
-          }
-          // Retry the failed renewal itself, even if sealing succeeded and
-          // the replacement capability has a later expiry than the old one.
-          schedule(() => void renew(), 1000);
-        }
-      };
-      const scheduleRenewal = () =>
-        schedule(
-          () => void renew(),
-          Math.max(1000, capability.expiresAt - serverNow() - 12_000),
-        );
-      scheduleRenewal();
-      return sub;
-    };
-    scene = await subscribe<SceneRow>("scene", (rows, status, error) => {
-      const headerRow = rows.find((r) => r.kind === "world"),
-        header = headerRow ? (sceneEntity(headerRow) as World) : undefined;
-      const parts = rows
-          .filter((r) => r.kind === "part")
-          .map((r) => sceneEntity(r) as Part),
-        connections = rows
-          .filter((r) => r.kind === "connection")
-          .map((r) => sceneEntity(r) as Connection);
-      if (
-        header &&
-        state.world &&
-        header.generation !== state.world.generation
-      ) {
-        intent = { preview: null, selection: [], cursor: null };
-        lastIntent = "";
-        publish({ pending: [], history: { undo: null, redo: null } });
-        void history();
-      }
-      const pending = state.pending.filter(
-        (p) =>
-          !p.receipt?.accepted ||
-          !p.parts.every((part) =>
-            part.deleted
-              ? !parts.some((x) => x.id === part.id)
-              : parts.some(
-                  (x) => x.id === part.id && x.revision >= part.revision,
-                ),
-          ),
-      );
-      if (status === "live" && !header) {
-        publish({
-          parts: [],
-          connections: [],
-          pending: [],
-          status: "error",
-          error: "Workshop access ended. Reload to rejoin.",
+      try {
+        const live = await openLiveQuery({
+          client: client!,
+          fetchQuery: (signal) =>
+            api<SealedLiveQuery<T>>(`/worlds/${joined.world.id}/live/${kind}`, {
+              signal: AbortSignal.any([signal, abort.signal]),
+            }),
+          now: serverNow,
+          active,
+          receive: ({ data, status, error }) => receive(data, status, error),
         });
-        return;
+        subscriptions.add(live.stop);
+        return live.sub;
+      } catch (error) {
+        if (active()) receive([], "error", (error as Error).message);
+        return undefined;
       }
-      publish({
-        ...(header ? { world: header } : {}),
-        parts,
-        connections,
-        pending,
-        status,
-        ...(error
-          ? { error }
-          : status === "live" && state.status !== "live"
-            ? { error: null }
+    };
+    const sceneSubscription = await subscribe<SceneRow>(
+      "scene",
+      (rows, status, error) => {
+        const headerRow = rows.find((r) => r.kind === "world"),
+          header = headerRow ? (sceneEntity(headerRow) as World) : undefined;
+        const parts = rows
+            .filter((r) => r.kind === "part")
+            .map((r) => sceneEntity(r) as Part),
+          connections = rows
+            .filter((r) => r.kind === "connection")
+            .map((r) => sceneEntity(r) as Connection);
+        if (
+          header &&
+          state.world &&
+          header.generation !== state.world.generation
+        ) {
+          intent = { preview: null, selection: [], cursor: null };
+          lastIntent = "";
+          publish({ pending: [], history: { undo: null, redo: null } });
+        }
+        const pending = state.pending.filter(
+          (p) =>
+            !p.receipt?.accepted ||
+            !p.parts.every((part) =>
+              part.deleted
+                ? !parts.some((x) => x.id === part.id)
+                : parts.some(
+                    (x) => x.id === part.id && x.revision >= part.revision,
+                  ),
+            ),
+        );
+        if (status === "live" && !header) {
+          publish({
+            parts: [],
+            connections: [],
+            pending: [],
+            status: "error",
+            error: "Workshop access ended. Reload to rejoin.",
+          });
+          return;
+        }
+        publish({
+          ...(header ? { world: header } : {}),
+          parts,
+          connections,
+          pending,
+          ...(status === "live" && header
+            ? {
+                history:
+                  liveHistory?.generation === header.generation
+                    ? { undo: liveHistory.undo, redo: liveHistory.redo }
+                    : { undo: null, redo: null },
+              }
             : {}),
-      });
-    });
-    await subscribe<Viewer>("presence", (rows) =>
-      publish({ viewers: [...rows] }),
-    );
-    await subscribe<{ undo: string | null; redo: string | null }>(
-      "history",
-      (rows) => {
-        if (rows[0])
-          publish({ history: { undo: rows[0].undo, redo: rows[0].redo } });
+          status,
+          ...(error
+            ? { error }
+            : status === "live" && state.status !== "live"
+              ? { error: null }
+              : {}),
+        });
       },
     );
-    await history();
+    if (!active()) return;
+    scene = sceneSubscription;
+    const queryState = (
+      kind: "presence" | "history" | "member",
+      status: string,
+      error?: string,
+    ) => ({
+      ...state.queries,
+      [kind]: { status, error },
+    });
+    const presenceSubscription = subscribe<Viewer>(
+      "presence",
+      (rows, status, error) => {
+        publish({
+          queries: queryState("presence", status, error),
+          ...(status === "live" || status === "error"
+            ? { viewers: [...rows] }
+            : {}),
+        });
+      },
+    );
+    const historySubscription = subscribe<{
+      undo: string | null;
+      redo: string | null;
+      generation: number;
+    }>("history", (rows, status, error) => {
+      if (status === "live" || status === "error") liveHistory = rows[0];
+      publish({
+        queries: queryState("history", status, error),
+        ...(status === "live" || status === "error"
+          ? {
+              history:
+                rows[0] && rows[0].generation === state.world?.generation
+                  ? { undo: rows[0].undo, redo: rows[0].redo }
+                  : { undo: null, redo: null },
+            }
+          : {}),
+      });
+    });
+    const memberSubscription = subscribe<Member>(
+      "member",
+      (rows, status, error) => {
+        const member = rows[0];
+        publish({
+          queries: queryState("member", status, error),
+          ...(status === "live"
+            ? {
+                name: member?.name || "",
+                color: member?.color || COLORS[0].hex,
+                role: member?.role || null,
+              }
+            : {}),
+          canBuildAI: status === "live" && member?.role === "editor",
+          canReset: status === "live" && member?.can_reset === true,
+        });
+      },
+    );
+    if (!active()) return;
     heartTimer = setInterval(() => {
       if (document.visibilityState === "visible") void sendPresence(false);
     }, 10_000);
@@ -387,20 +417,28 @@ export async function start(slug: string) {
         );
     }, 5 * 60_000);
     await sendPresence(false);
+    await Promise.all([
+      presenceSubscription,
+      historySubscription,
+      memberSubscription,
+    ]);
   } catch (e) {
     if (active()) publish({ status: "error", error: (e as Error).message });
   }
 }
 export function stop() {
+  startAbort?.abort();
   disposed = true;
   ++epoch;
-  renewTimers.forEach(clearTimeout);
-  renewTimers.clear();
+  subscriptions.forEach((off) => off());
+  subscriptions.clear();
   clearInterval(heartTimer);
   clearInterval(sessionTimer);
   clearTimeout(presenceTimer);
   presenceTimer = undefined;
   client?.close();
+  client = undefined;
+  scene = undefined;
   if (viewer && state.world)
     void api(`/worlds/${state.world.id}/viewers/${viewer}`, {
       method: "DELETE",
@@ -517,7 +555,10 @@ export async function submit(
   if (
     !state.world ||
     state.world.status !== "open" ||
-    state.status !== "live"
+    state.status !== "live" ||
+    state.queries.member.status !== "live" ||
+    state.role !== "editor" ||
+    (request.action !== "edit" && state.queries.history.status !== "live")
   ) {
     notice("Wait for the live connection before editing.");
     return false;
@@ -585,7 +626,6 @@ export async function submit(
       pending: state.pending.filter((p) => p.id !== edit.operationId),
       error: receipt.error || "Edit conflicted",
     });
-    await history();
     return false;
   }
   if (state.world?.generation !== receipt.generation) return true;
@@ -596,7 +636,6 @@ export async function submit(
         : p,
     ),
     lastTx: receipt.txid || null,
-    history: receipt.history || state.history,
   });
   try {
     if (receipt.txid) await scene?.awaitTxId(receipt.txid, 5000);
@@ -653,7 +692,6 @@ async function recover(edit: Edit, world: string) {
               ? { ...p, receipt: r, parts: r.parts || [] }
               : p,
           ),
-          history: r.history || state.history,
           lastTx: r.txid || null,
         });
         try {
@@ -723,7 +761,6 @@ export async function rename(name: string) {
     method: "POST",
     body: JSON.stringify({ name, color: state.color }),
   });
-  publish({ name });
 }
 
 export async function lifecycleRoom(status: "open" | "closed") {

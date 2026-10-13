@@ -30,6 +30,7 @@ export const aiGenerations = pgTable(
   {
     id: uuid().primaryKey(),
     guest: uuid().notNull(),
+    session: uuid(),
     prompt: text().notNull(),
     model: text().notNull(),
     status: text().notNull().default("queued"),
@@ -60,6 +61,10 @@ export const aiGenerations = pgTable(
   (t) => [
     index("ai_generations_guest_created").on(t.guest, t.createdAt),
     index("ai_generations_status_lease").on(t.status, t.leaseUntil),
+    index("ai_generations_target_created").on(t.target, t.createdAt, t.id),
+    index("ai_generations_legacy_created")
+      .on(t.world, t.guest, t.createdAt, t.id)
+      .where(sql`${t.target} IS NULL`),
   ],
 );
 export const guests = pgTable("guests", {

@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
+import { waitUntil } from "@neon/functions";
 import { parseTriggerDelivery } from "@neon/functions/triggers";
 import { pool, transaction } from "./db";
 import {
@@ -14,7 +15,13 @@ import {
 } from "./auth";
 import { createWorld, joinWorld, insertPart } from "./worlds";
 import { execute, reconnectParts } from "./commands";
-import { realtime, sceneQuery, presenceQuery, historyQuery } from "./live";
+import {
+  realtime,
+  sceneQuery,
+  presenceQuery,
+  historyQuery,
+  memberQuery,
+} from "./live";
 import { starter } from "../shared/starter";
 import { validPart, collision } from "../shared/geometry";
 import { WORLD_LIMIT, HEIGHT_LIMIT, UNIT } from "../shared/types";
@@ -31,6 +38,8 @@ import {
   acceptGeneration,
   generationQuery,
   expireGenerations,
+  dispatchGeneration,
+  reconcileGenerations,
 } from "./ai";
 const origins = (
   process.env.ALLOWED_ORIGINS ||
@@ -134,6 +143,13 @@ app.post("/api/cleanup", async (c) => {
   });
   return c.json(result);
 });
+app.post("/api/ai/reconcile", async (c) => {
+  const delivery = await parseTriggerDelivery(c.req.raw);
+  if (!delivery.ok || delivery.invocation.type !== "schedule")
+    return c.json({ error: "Scheduled trigger delivery required" }, 401);
+  await reconcileGenerations();
+  return c.json({ ok: true });
+});
 app.use("/api/*", async (c, next) => {
   c.set("identity", await authenticate(c.req.header("authorization")));
   await next();
@@ -200,7 +216,18 @@ app.post("/api/ai/generations", async (c) => {
       "Choose a new or existing workshop",
     )
     .parse(await c.req.json());
-  return c.json(await createGeneration(c.get("identity"), input), 201);
+  const generation = await createGeneration(c.get("identity"), input);
+  if (generation.status === "queued")
+    waitUntil(
+      dispatchGeneration(generation.id).catch((error) =>
+        console.error(
+          "[ai-dispatch]",
+          generation.id,
+          error instanceof Error ? error.name : "Error",
+        ),
+      ),
+    );
+  return c.json(generation, 201);
 });
 app.get("/api/ai/generations/:id", async (c) =>
   c.json(
@@ -254,6 +281,8 @@ app.get("/api/worlds/:world/live/:kind", async (c) => {
     return c.json(await realtime().seal({ query: sceneQuery(world, a) }));
   if (kind === "presence")
     return c.json(await realtime().seal({ query: presenceQuery(world, a) }));
+  if (kind === "member")
+    return c.json(await realtime().seal({ query: memberQuery(world, a) }));
   if (kind === "history")
     return c.json(await realtime().seal({ query: historyQuery(world, a) }));
   if (kind === "ai")

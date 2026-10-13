@@ -6,19 +6,28 @@ export const activeAIStates = ["queued", "designing", "checking", "repairing"];
 // prompts from other devices and rows removed by a membership withdrawal.
 export function conversationRows(
   rows: readonly AIConversationRow[],
+  previous: readonly AIGeneration[] = [],
 ): AIGeneration[] {
+  const prior = new Map(previous.map((r) => [r.id, r]));
   return [...rows]
     .sort(
       (a, b) =>
         (a.created_at || "").localeCompare(b.created_at || "") ||
         a.id.localeCompare(b.id),
     )
-    .map((row) => ({
-      ...row,
-      parts: ["ready", "accepted"].includes(row.status)
-        ? row.preview?.parts || []
-        : [],
-    }));
+    .map((row) => {
+      const next = {
+        ...row,
+        blueprint:
+          row.blueprint ??
+          (row.title ? { title: row.title, summary: row.summary || "" } : null),
+        parts: ["ready", "accepted"].includes(row.status)
+          ? row.preview?.parts || []
+          : [],
+      };
+      const old = prior.get(row.id);
+      return old && JSON.stringify(old) === JSON.stringify(next) ? old : next;
+    });
 }
 
 export function conversationState(jobs: AIGeneration[]) {

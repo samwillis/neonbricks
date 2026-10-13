@@ -93,7 +93,7 @@ npm run neon -- deploy --env .env.local --no-env-pull --update-existing
 npm run build
 ```
 
-Migrations use the direct connection and verify TLS certificates. The app reuses a module-level `pg` pool. `neon.ts` declares the Function, its secrets, permitted origins, and a five-minute authenticated cleanup trigger. Review the plan before applying changes to another branch.
+Migrations use the direct connection and verify TLS certificates. The app reuses a module-level `pg` pool. `neon.ts` declares the Function, its secrets, permitted origins, a five-minute authenticated cleanup trigger, and a one-minute AI reconciliation trigger. Review the plan before applying changes to another branch.
 
 The frontend is deployed to Vercel project **neonbricks-app** in **samwillis-projects**, at <https://neonbricks-app.vercel.app>. `vercel.json` declares the Vite build, `dist/` output and SPA fallback. Vercel stores only `VITE_API_URL` and `VITE_NEON_REALTIME_URL`; database, sealing and Gateway credentials stay on Neon. The exact production origin is included in Function CORS and Realtime's allowed origins. Other Vercel aliases and preview URLs need their own explicit origin allowance before they can connect.
 
@@ -118,7 +118,7 @@ Geometric edits lock pre-created four-stud neighbourhood buckets in numeric orde
 
 Appearance edits lock the changed parts and do not rebuild topology. Geometric edits compare the complete incident connection set, including an expected empty set. Undo/redo use compensating commands and effective revision bridges; another builder's changed revision or attachment can reject compensation.
 
-One deterministic `UNION ALL` query carries the header, parts, and connections. It returns typed columns because the preview engine rejects the mutable JSON construction function. The browser assembles objects and applies each authoritative result atomically. Presence and personal history have separate subscriptions over the same socket.
+One deterministic `UNION ALL` query carries the header, parts, and connections. It returns typed columns because the preview engine rejects the mutable JSON construction function. The browser assembles objects and applies each authoritative result atomically. Presence, personal history, current-member metadata and workshop AI chat have separate subscriptions over the same socket. Live history is authoritative; delayed HTTP receipts cannot replace undo/redo pointers. Member metadata keeps names, colours and editor/viewer permissions current across devices. Each query reports its own status; an unavailable chat or cursor query does not mark a saved scene unsaved. Capability refresh continues through socket outages using the corrected server clock, and authorization denial detaches the affected subscription.
 
 Guest tokens are opaque and hashed in Postgres. Sessions slide for 30 minutes and have a 24-hour absolute maximum. Every sealed query contains membership and session-revocation predicates; capabilities expire after 60 seconds and renew before expiry. Session expiry denies renewal, so an existing capability can retain access only until its recorded expiry. There is no dependence on RLS in the preview engine.
 
@@ -138,6 +138,7 @@ npm run test:presence
 npm run test:locks
 npm run test:ai
 npm run test:ai:workshop
+npm run test:realtime
 npm run test:capacity
 ```
 

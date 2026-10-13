@@ -40,6 +40,7 @@ import {
   type AISnapshot,
 } from "../shared/ai-workshop";
 import type { PoolClient } from "pg";
+import { watchCancellation } from "./ai-lifecycle";
 import { rawSql } from "@neon/realtime/server";
 
 const active = ["queued", "designing", "checking", "repairing"];
@@ -52,11 +53,13 @@ export const aiConfiguration = () => ({
   model: model(),
   version: AI_BUILDER_VERSION,
 });
-export const AI_BUILDER_VERSION = "geometry-repair-1";
+export const AI_BUILDER_VERSION = "realtime-lifecycle-2";
 export const aiAvailable = () =>
   !!(process.env.NEON_AI_GATEWAY_TOKEN && process.env.NEON_AI_GATEWAY_BASE_URL);
 const publicColumns =
   "g.id::text,g.prompt,g.model,g.status,g.attempt,g.error,g.world::text,g.source::text,g.target::text,g.preview,g.activity,g.preview_version,g.blueprint,g.guest::text AS author,author.name AS author_name,author.color AS author_color,g.created_at::text,g.updated_at::text";
+const conversationColumns =
+  "g.id::text,g.prompt,g.model,g.status,g.attempt,g.error,g.world::text,g.source::text,g.target::text,g.activity,g.preview_version,g.blueprint->>'title' AS title,g.blueprint->>'summary' AS summary,g.guest::text AS author,author.name AS author_name,author.color AS author_color,g.created_at::text,g.updated_at::text,coalesce(jsonb_array_length(g.preview->'parts'),0) AS piece_count";
 const conversationFrom =
   "ai_generations g JOIN guests author ON author.id=g.guest";
 // Membership/session predicates stay in the live query, so withdrawal removes
@@ -87,7 +90,6 @@ export async function expireGenerations() {
   );
 }
 export async function getGeneration(a: Identity, id: string) {
-  await expireGenerations();
   const row = await transaction(async (c) => {
     await generationAccess(c, a, id);
     const { rows } = await c.query(
@@ -116,7 +118,15 @@ export function generationQuery(a: Identity, id: string) {
 }
 export function conversationQuery(a: Identity, world: string) {
   return rawSql<AIConversationRow>(
-    `SELECT ${publicColumns} FROM ${conversationFrom} WHERE (g.target=$1::uuid OR (g.target IS NULL AND g.world=$1::uuid AND g.guest=$2::uuid)) AND ${memberAccess("$1::uuid")} ORDER BY g.created_at DESC,g.id DESC LIMIT 50`,
+    `WITH recent AS (
+      (SELECT g.* FROM ai_generations g WHERE g.target=$1::uuid AND ${memberAccess("$1::uuid")} ORDER BY g.created_at DESC,g.id DESC LIMIT 50)
+      UNION ALL
+      (SELECT g.* FROM ai_generations g WHERE g.target IS NULL AND g.world=$1::uuid AND g.guest=$2::uuid AND ${memberAccess("$1::uuid")} ORDER BY g.created_at DESC,g.id DESC LIMIT 50)
+    ), history AS (SELECT * FROM recent ORDER BY created_at DESC,id DESC LIMIT 50)
+    SELECT ${conversationColumns},CASE WHEN g.status IN ('queued','designing','checking','repairing') OR
+      (g.status='ready' AND NOT EXISTS(SELECT 1 FROM history later WHERE later.status IN ('ready','accepted') AND (later.created_at,later.id)>(g.created_at,g.id)))
+      THEN g.preview ELSE NULL::jsonb END AS preview
+    FROM history g JOIN guests author ON author.id=g.guest ORDER BY g.created_at DESC,g.id DESC`,
     [world, a.guest, a.session],
   );
 }
@@ -129,6 +139,7 @@ export async function createGeneration(
     target?: string;
     newWorld?: boolean;
   },
+  options: { dispatch?: boolean } = {},
 ) {
   if (!aiAvailable())
     throw new DomainError("AI building is not configured yet", 503);
@@ -213,7 +224,7 @@ export async function createGeneration(
         throw new DomainError("That draft belongs to another workshop", 409);
     }
     await c.query(
-      "INSERT INTO ai_generations(id,guest,prompt,model,source,reference,target,snapshot,lease_until) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb,clock_timestamp()+interval '3 minutes')",
+      "INSERT INTO ai_generations(id,guest,prompt,model,source,reference,target,snapshot,session,lease_until) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb,$9,clock_timestamp()+interval '3 minutes')",
       [
         input.id,
         a.guest,
@@ -223,6 +234,7 @@ export async function createGeneration(
         reference ? JSON.stringify(reference) : null,
         target,
         snapshot ? JSON.stringify(snapshot) : null,
+        options.dispatch === false ? null : a.session,
       ],
     );
   });
@@ -255,7 +267,6 @@ async function workshopSnapshot(
 }
 
 export async function listGenerations(a: Identity, target: string) {
-  await expireGenerations();
   const rows = await transaction(async (c) => {
     await lockAccess(c, a, target, false);
     return (
@@ -547,11 +558,20 @@ export async function buildCandidate(
   throw new DomainError(fitFailureMessage(best?.compiled));
 }
 
-export async function runGeneration(a: Identity, id: string) {
+export async function runGeneration(
+  a: Identity,
+  id: string,
+  generate: GenerateCandidate = generateCandidate,
+) {
   await getGeneration(a, id);
   const claimed = await transaction(async (c) => {
     await c.query("SELECT id FROM ai_generations WHERE id=$1 FOR UPDATE", [id]);
     await generationAccess(c, a, id, true);
+    const session = await c.query(
+      "SELECT id FROM guest_sessions WHERE id=$1 AND guest=$2 AND revoked=0 AND expires_at>clock_timestamp() AND absolute_expiry>clock_timestamp() FOR SHARE",
+      [a.session, a.guest],
+    );
+    if (!session.rowCount) throw new DomainError("Session expired", 401);
     return c.query(
       "UPDATE ai_generations SET status='designing',lease_until=clock_timestamp()+interval '160 seconds',updated_at=clock_timestamp() WHERE id=$1 AND status='queued' RETURNING prompt,model,reference",
       [id],
@@ -564,32 +584,19 @@ export async function runGeneration(a: Identity, id: string) {
     controller.signal,
     AbortSignal.timeout(150_000),
   ]);
-  const timer = setInterval(() => {
-    void pool
-      .query("SELECT status FROM ai_generations WHERE id=$1", [id])
-      .then((r) => {
-        if (!running.includes(r.rows[0]?.status)) controller.abort();
-      })
-      .catch(() => controller.abort());
-  }, 2000);
+  let stopCancellation: (() => void) | undefined;
   try {
+    stopCancellation = await watchCancellation(id, controller);
     const row = claimed.rows[0];
     const compiled = await buildCandidate(
       row.prompt,
       row.model,
       signal,
       (prompt, repair, signal, model, previous) =>
-        generateCandidate(
-          prompt,
-          repair,
-          signal,
-          model,
-          previous,
-          async (preview) => {
-            if (!(await recordDrawing(id, preview))) controller.abort();
-            signal.throwIfAborted();
-          },
-        ),
+        generate(prompt, repair, signal, model, previous, async (preview) => {
+          if (!(await recordDrawing(id, preview))) controller.abort();
+          signal.throwIfAborted();
+        }),
       async (attempt, stage, result) => {
         if (!(await recordGenerationAttempt(id, attempt, stage, result)))
           controller.abort();
@@ -626,10 +633,49 @@ export async function runGeneration(a: Identity, id: string) {
       [id, message, running],
     );
   } finally {
-    clearInterval(timer);
+    stopCancellation?.();
     controllers.delete(id);
   }
   return getGeneration(a, id);
+}
+
+export async function dispatchGeneration(id: string) {
+  const { rows } = await pool.query(
+    `SELECT s.id AS session,s.guest,g.name,g.color FROM ai_generations job
+     JOIN guest_sessions s ON s.guest=job.guest AND job.session=s.id
+     JOIN guests g ON g.id=s.guest
+     WHERE job.id=$1 AND job.status='queued' AND s.revoked=0
+       AND s.expires_at>clock_timestamp() AND s.absolute_expiry>clock_timestamp()
+     ORDER BY s.absolute_expiry DESC LIMIT 1`,
+    [id],
+  );
+  if (!rows[0]) {
+    await pool.query(
+      "UPDATE ai_generations SET status='failed',error='The build session ended. Please ask again.',updated_at=clock_timestamp() WHERE id=$1 AND status='queued'",
+      [id],
+    );
+    return;
+  }
+  try {
+    await runGeneration(rows[0], id);
+  } catch (error) {
+    if (
+      error instanceof DomainError &&
+      [401, 403, 410].includes(error.status)
+    ) {
+      await pool.query(
+        "UPDATE ai_generations SET status='failed',error='Workshop access changed. Please ask again.',updated_at=clock_timestamp() WHERE id=$1 AND status='queued'",
+        [id],
+      );
+    } else throw error;
+  }
+}
+export async function reconcileGenerations() {
+  await expireGenerations();
+  const { rows } = await pool.query(
+    "SELECT id::text FROM ai_generations WHERE status='queued' AND session IS NOT NULL ORDER BY created_at LIMIT 2",
+  );
+  await Promise.all(rows.map(({ id }) => dispatchGeneration(id)));
 }
 
 export async function cancelGeneration(a: Identity, id: string) {

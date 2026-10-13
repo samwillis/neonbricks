@@ -7,6 +7,12 @@ export default defineConfig({
   aiGateway: true,
   preview: { realtime: { allowedOrigins: origins } },
   triggers: {
+    "ai-reconcile": {
+      type: "schedule",
+      function: "bricks",
+      cron: "* * * * *",
+      functionPath: "/api/ai/reconcile",
+    },
     "workshop-cleanup": {
       type: "schedule",
       function: "bricks",

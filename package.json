@@ -23,7 +23,8 @@
     "test:ai:benchmark": "node --env-file=.env.local --import tsx scripts/benchmark-ai.ts",
     "test:capacity": "node --env-file=.env.local --import tsx scripts/test-capacity.ts",
     "format": "prettier --write src scripts tests *.ts *.md",
-    "test:locks": "node --env-file=.env.local --import tsx scripts/test-locks.ts"
+    "test:locks": "node --env-file=.env.local --import tsx scripts/test-locks.ts",
+    "test:realtime": "node --env-file=.env.local --import tsx scripts/test-realtime.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",
@@ -42,7 +43,8 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "three": "^0.180.0",
-    "zod": "^4.1.0"
+    "zod": "^4.1.0",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
@@ -58,8 +60,7 @@
     "tsx": "^4.20.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.4",
-    "vitest": "^5.0.3",
-    "ws": "^8.22.0"
+    "vitest": "^5.0.3"
   },
   "engines": {
     "node": ">=22.18.0"

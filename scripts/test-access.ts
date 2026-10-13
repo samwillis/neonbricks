@@ -170,6 +170,7 @@ try {
     0,
   );
   assert.equal((await request("", "/cleanup", {})).status, 401);
+  assert.equal((await request("", "/ai/reconcile", {})).status, 401);
   await pool.query(
     "UPDATE world_memberships SET role='viewer' WHERE world=$1 AND guest=$2",
     [world.id, jb.guest],

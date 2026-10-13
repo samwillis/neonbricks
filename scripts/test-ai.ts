@@ -1,3 +1,5 @@
+import { createGeneration, expireGenerations } from "../src/server/ai";
+import { authenticate, DomainError } from "../src/server/auth";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { writeFile, mkdir } from "node:fs/promises";
@@ -11,7 +13,24 @@ const base = (process.env.TEST_API_URL || process.env.VITE_API_URL!).replace(
   /\/$/,
   "",
 );
+let actualGeneration = false;
 async function request(token: string, path: string, body?: unknown) {
+  if (path === "/ai/generations" && body && !actualGeneration) {
+    try {
+      return {
+        status: 201,
+        data: await createGeneration(
+          await authenticate(`Bearer ${token}`),
+          body as Parameters<typeof createGeneration>[1],
+          { dispatch: false },
+        ),
+      };
+    } catch (error) {
+      if (error instanceof DomainError)
+        return { status: error.status, data: { error: error.message } };
+      throw error;
+    }
+  }
   const response = await fetch(`${base}/api${path}`, {
     method: body === undefined ? "GET" : "POST",
     headers: {
@@ -340,7 +359,8 @@ try {
       [expired.id],
     );
     assert.equal(
-      (await ok(a.token, `/ai/generations/${expired.id}`)).status,
+      (await expireGenerations(),
+      await ok(a.token, `/ai/generations/${expired.id}`)).status,
       "failed",
     );
     console.log(
@@ -351,6 +371,7 @@ try {
     process.argv.includes("--generate") ||
     process.argv.includes("--generate-only")
   ) {
+    actualGeneration = true;
     const id = randomUUID();
     const prompt =
       process.env.AI_TEST_PROMPT ||

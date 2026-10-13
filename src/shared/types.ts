@@ -32,8 +32,13 @@ export type AIGeneration = AIGenerationProgress & {
   author_name?: string;
   author_color?: string;
   created_at?: string;
+  piece_count?: number;
 };
-export type AIConversationRow = Omit<AIGeneration, "parts">;
+export type AIConversationRow = Omit<AIGeneration, "parts" | "blueprint"> & {
+  title?: string | null;
+  summary?: string | null;
+  blueprint?: AIGeneration["blueprint"];
+};
 export type Part = {
   id: string;
   key: string;
@@ -58,6 +63,13 @@ export type World = {
   generation: number;
   catalogue: string;
   status: string;
+};
+export type Member = {
+  id: string;
+  name: string;
+  color: string;
+  role: string;
+  can_reset: boolean;
 };
 export type SceneRow = {
   kind: string;

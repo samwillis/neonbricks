@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { ArrowUp, Check, LoaderCircle, Sparkles, X } from "lucide-react";
 import type { AIGeneration } from "../shared/types";
 import {
@@ -31,7 +31,11 @@ export default function AIBuildPanel({
   const { job, preview } = conversationState(jobs);
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [queryStatus, setQueryStatus] = useState("connecting");
+  const [queryError, setQueryError] = useState("");
+  const [retry, setRetry] = useState(0);
+  const loading = queryStatus === "connecting";
+  const live = queryStatus === "live";
   const [submitting, setSubmitting] = useState(false);
   const [applying, setApplying] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -45,6 +49,9 @@ export default function AIBuildPanel({
 
   useEffect(() => {
     mounted.current = true;
+    setQueryStatus("connecting");
+    setQueryError("");
+    const abort = new AbortController();
     let alive = true,
       stop: (() => void) | undefined;
     void api<{ available: boolean }>("/ai/config")
@@ -56,29 +63,33 @@ export default function AIBuildPanel({
       });
     void watchConversation(
       world,
-      (rows) => {
+      ({ data, status, error }) => {
         if (!alive) return;
-        setJobs(conversationRows(rows));
-        setLoading(false);
+        setQueryStatus(status);
+        setQueryError(error || "");
+        if (status === "live" || status === "error")
+          setJobs((previous) => conversationRows(data, previous));
       },
-      (message) => {
-        if (alive) setError(message);
-      },
+      abort.signal,
     )
       .then((off) => {
         if (alive) stop = off;
         else off();
       })
       .catch((e) => {
-        if (alive) setError(e.message);
+        if (alive) {
+          setQueryStatus("error");
+          setQueryError(e.message);
+        }
       });
     return () => {
       alive = false;
+      abort.abort();
       mounted.current = false;
       stop?.();
       onPreview(null);
     };
-  }, [world, onPreview]);
+  }, [world, onPreview, retry]);
   useEffect(() => {
     onPreview(drawing);
   }, [drawing, onPreview]);
@@ -103,27 +114,12 @@ export default function AIBuildPanel({
       behavior: "smooth",
     });
   }, [jobs.length, job?.status, error, preview?.id]);
-  useEffect(() => {
-    if (!job || !busy) return;
-    // Any editor can resume a queued workshop request. One transactional claim
-    // wins across devices; all rendering continues to come from the live query.
-    if (job.status === "queued" && editable)
-      void api(`/ai/generations/${job.id}/run`, {
-        method: "POST",
-        signal: AbortSignal.timeout(175000),
-      }).catch(() => {});
-    // Reads expire evicted work; HTTP responses never overwrite live snapshots.
-    const timer = setInterval(() => {
-      void api(`/ai/generations/${job.id}`).catch(() => {});
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [job?.id, job?.status === "queued", busy, editable]);
 
   async function send() {
     if (
       submission.current ||
       busy ||
-      loading ||
+      !live ||
       applying ||
       !editable ||
       !available ||
@@ -160,7 +156,7 @@ export default function AIBuildPanel({
     }
   }
   async function cancel() {
-    if (!job || !editable) return;
+    if (!job || !editable || !live) return;
     try {
       await api(`/ai/generations/${job.id}/cancel`, { method: "POST" });
     } catch (e) {
@@ -168,7 +164,7 @@ export default function AIBuildPanel({
     }
   }
   async function apply() {
-    if (!preview || busy || applying || !editable) return;
+    if (!preview || busy || applying || !editable || !live) return;
     setApplying(true);
     setError("");
     try {
@@ -189,7 +185,7 @@ export default function AIBuildPanel({
     }
   }
   async function discard() {
-    if (!preview || busy || applying || !editable) return;
+    if (!preview || busy || applying || !editable || !live) return;
     try {
       await api(`/ai/generations/${preview.id}/cancel`, { method: "POST" });
       if (!mounted.current) return;
@@ -238,69 +234,13 @@ export default function AIBuildPanel({
           )
         )}
         {jobs.map((row) => (
-          <div className="ai-exchange" key={row.id}>
-            <div className="ai-message-label">
-              <span
-                className="ai-author-dot"
-                style={{ background: row.author_color || "var(--green)" }}
-              />
-              {row.author_name || "Builder"}
-              {row.author === guest ? " · you" : ""}
-            </div>
-            <p className="ai-user-message">{row.prompt}</p>
-            <div className="ai-message-label ai-assistant-label">
-              <Sparkles size={12} />
-              neonbricks
-            </div>
-            {activeStates.includes(row.status) ? (
-              <div className="ai-live-message">
-                <span>
-                  <LoaderCircle size={14} className="spin" />
-                  {row.activity || stages[row.status]}
-                </span>
-                {row.id === job?.id && (
-                  <small>
-                    {elapsed}s
-                    {row.attempt > 1 ? ` · design pass ${row.attempt}` : ""}
-                  </small>
-                )}
-                <p>
-                  {row.preview?.parts.length
-                    ? "A draft is taking shape on the canvas."
-                    : "Your current model stays safe while I work."}
-                </p>
-              </div>
-            ) : row.status === "failed" ? (
-              <p className="ai-error">
-                {row.error || "This build was interrupted. Please try again."}
-              </p>
-            ) : row.status === "cancelled" ? (
-              <p className="ai-chat-note">
-                Draft set aside. The workshop is unchanged.
-              </p>
-            ) : (
-              <>
-                <p className="ai-assistant-message">
-                  {row.blueprint?.summary &&
-                  row.blueprint.summary !== "The current workshop model."
-                    ? row.blueprint.summary
-                    : row.status === "accepted"
-                      ? "Your changes are applied."
-                      : "Your updated draft is ready."}
-                </p>
-                <span className="ai-chat-result">
-                  {row.status === "accepted" ? (
-                    <>
-                      <Check size={12} />
-                      Applied to the model
-                    </>
-                  ) : (
-                    `${row.parts.length || row.preview?.parts.length || 0} pieces · draft ready`
-                  )}
-                </span>
-              </>
-            )}
-          </div>
+          <AIExchange
+            key={row.id}
+            row={row}
+            guest={guest}
+            current={row.id === job?.id}
+            elapsed={row.id === job?.id ? elapsed : 0}
+          />
         ))}
       </div>
       {preview && !busy && (
@@ -309,7 +249,7 @@ export default function AIBuildPanel({
           <div>
             <button
               className="primary-button"
-              disabled={applying || submitting || !editable}
+              disabled={applying || submitting || !editable || !live}
               onClick={() => void apply()}
             >
               {applying ? "Applying…" : "Apply to model"}
@@ -317,12 +257,28 @@ export default function AIBuildPanel({
             </button>
             <button
               className="ai-secondary"
-              disabled={applying || submitting || !editable}
+              disabled={applying || submitting || !editable || !live}
               onClick={() => void discard()}
             >
               Keep current
             </button>
           </div>
+        </div>
+      )}
+      {!live && !loading && (
+        <div className="ai-chat-error" role="status">
+          <p>
+            {queryError ||
+              "Chat is reconnecting. Changes will be available when it is live again."}
+          </p>
+          {queryStatus === "error" && (
+            <button
+              className="ai-secondary"
+              onClick={() => setRetry((n) => n + 1)}
+            >
+              Reconnect chat
+            </button>
+          )}
         </div>
       )}
       {error && (
@@ -356,7 +312,7 @@ export default function AIBuildPanel({
               : "What would you like to change?"
           }
           value={prompt}
-          disabled={loading || applying || !editable}
+          disabled={!live || applying || !editable}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => {
             if (
@@ -381,7 +337,7 @@ export default function AIBuildPanel({
             <button
               type="button"
               className="ai-secondary"
-              disabled={!editable}
+              disabled={!editable || !live}
               onClick={() => void cancel()}
             >
               Stop
@@ -393,7 +349,7 @@ export default function AIBuildPanel({
               disabled={
                 !editable ||
                 !available ||
-                loading ||
+                !live ||
                 submitting ||
                 applying ||
                 prompt.trim().length < 3
@@ -411,3 +367,80 @@ export default function AIBuildPanel({
     </aside>
   );
 }
+
+const AIExchange = memo(function AIExchange({
+  row,
+  guest,
+  current,
+  elapsed,
+}: {
+  row: AIGeneration;
+  guest: string;
+  current: boolean;
+  elapsed: number;
+}) {
+  return (
+    <div className="ai-exchange">
+      <div className="ai-message-label">
+        <span
+          className="ai-author-dot"
+          style={{ background: row.author_color || "var(--green)" }}
+        />
+        {row.author_name || "Builder"}
+        {row.author === guest ? " · you" : ""}
+      </div>
+      <p className="ai-user-message">{row.prompt}</p>
+      <div className="ai-message-label ai-assistant-label">
+        <Sparkles size={12} />
+        neonbricks
+      </div>
+      {activeStates.includes(row.status) ? (
+        <div className="ai-live-message">
+          <span>
+            <LoaderCircle size={14} className="spin" />
+            {row.activity || stages[row.status]}
+          </span>
+          {current && (
+            <small>
+              {elapsed}s{row.attempt > 1 ? ` · design pass ${row.attempt}` : ""}
+            </small>
+          )}
+          <p>
+            {row.preview?.parts.length
+              ? "A draft is taking shape on the canvas."
+              : "Your current model stays safe while I work."}
+          </p>
+        </div>
+      ) : row.status === "failed" ? (
+        <p className="ai-error">
+          {row.error || "This build was interrupted. Please try again."}
+        </p>
+      ) : row.status === "cancelled" ? (
+        <p className="ai-chat-note">
+          Draft set aside. The workshop is unchanged.
+        </p>
+      ) : (
+        <>
+          <p className="ai-assistant-message">
+            {row.blueprint?.summary &&
+            row.blueprint.summary !== "The current workshop model."
+              ? row.blueprint.summary
+              : row.status === "accepted"
+                ? "Your changes are applied."
+                : "Your updated draft is ready."}
+          </p>
+          <span className="ai-chat-result">
+            {row.status === "accepted" ? (
+              <>
+                <Check size={12} />
+                Applied to the model
+              </>
+            ) : (
+              `${row.piece_count ?? row.parts.length} pieces · draft ready`
+            )}
+          </span>
+        </>
+      )}
+    </div>
+  );
+});

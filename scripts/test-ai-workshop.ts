@@ -1,3 +1,5 @@
+import { createGeneration } from "../src/server/ai";
+import { authenticate, DomainError } from "../src/server/auth";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import "./node-websocket";
@@ -13,6 +15,22 @@ const client = createRealtimeClient({
   url: process.env.VITE_NEON_REALTIME_URL!,
 });
 async function request(token: string, path: string, body?: unknown) {
+  if (path === "/ai/generations" && body && true) {
+    try {
+      return {
+        status: 201,
+        data: await createGeneration(
+          await authenticate(`Bearer ${token}`),
+          body as Parameters<typeof createGeneration>[1],
+          { dispatch: false },
+        ),
+      };
+    } catch (error) {
+      if (error instanceof DomainError)
+        return { status: error.status, data: { error: error.message } };
+      throw error;
+    }
+  }
   const res = await fetch(`${base}/api${path}`, {
     method: body === undefined ? "GET" : "POST",
     headers: {

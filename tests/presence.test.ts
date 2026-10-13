@@ -2,7 +2,12 @@ import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 
 vi.mock("@neon/realtime/client", () => ({
   createRealtimeClient: () => ({
-    subscribe: () => ({ onChange: vi.fn(), renew: vi.fn() }),
+    subscribe: () => ({
+      onChange: vi.fn(() => vi.fn()),
+      renew: vi.fn(() => Promise.resolve()),
+      unsubscribe: vi.fn(),
+      getSnapshot: () => ({ data: [], status: "connecting" }),
+    }),
     close: vi.fn(),
   }),
 }));

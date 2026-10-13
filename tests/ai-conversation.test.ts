@@ -75,3 +75,15 @@ describe("Shared AI conversation snapshots", () => {
     }
   });
 });
+
+it("reuses historic exchange objects while an active drawing changes", () => {
+  const history = row("applied", "accepted", "2026-10-13T10:00:00Z");
+  const busy = row("drawing", "designing", "2026-10-13T10:01:00Z");
+  const previous = conversationRows([history, busy]);
+  const next = conversationRows(
+    [{ ...history }, { ...busy, activity: "Drawing 20 pieces" }],
+    previous,
+  );
+  expect(next[0]).toBe(previous[0]);
+  expect(next[1]).not.toBe(previous[1]);
+});

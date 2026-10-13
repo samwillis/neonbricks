@@ -43,6 +43,13 @@
       "when": 1791875691245,
       "tag": "0005_keen_talon",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791891542092,
+      "tag": "0006_aberrant_professor_monster",
+      "breakpoints": true
     }
   ]
 }

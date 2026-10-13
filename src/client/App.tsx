@@ -256,7 +256,11 @@ export default function App() {
         : null,
   }));
   const canEdit =
-    state.status === "live" && state.world?.status === "open" && !aiDraft;
+    state.status === "live" &&
+    state.queries.member.status === "live" &&
+    state.role === "editor" &&
+    state.world?.status === "open" &&
+    !aiDraft;
   const filtered = CATALOGUE.filter(
     (d) =>
       (category === "All" || d.category === category) &&
@@ -415,7 +419,13 @@ export default function App() {
   }
   async function undo(redo = false) {
     const target = redo ? state.history.redo : state.history.undo;
-    if (!target || !canEdit || state.pending.length) return;
+    if (
+      !target ||
+      !canEdit ||
+      state.queries.history.status !== "live" ||
+      state.pending.length
+    )
+      return;
     cancel();
     await submit({ action: redo ? "redo" : "undo", target });
   }
@@ -1118,13 +1128,21 @@ export default function App() {
                 <ToolButton
                   icon={Undo2}
                   label="Undo (⌘Z)"
-                  disabled={!state.history.undo || !canEdit}
+                  disabled={
+                    !state.history.undo ||
+                    !canEdit ||
+                    state.queries.history.status !== "live"
+                  }
                   onClick={() => void undo()}
                 />
                 <ToolButton
                   icon={Redo2}
                   label="Redo (⇧⌘Z)"
-                  disabled={!state.history.redo || !canEdit}
+                  disabled={
+                    !state.history.redo ||
+                    !canEdit ||
+                    state.queries.history.status !== "live"
+                  }
                   onClick={() => void undo(true)}
                 />
                 <ToolButton
@@ -1266,6 +1284,24 @@ export default function App() {
               ? "Connection unavailable"
               : "Reconnecting…"}
         </span>
+        {state.status === "live" &&
+          Object.entries(state.queries)
+            .filter(([, q]) => q.status !== "live")
+            .map(([kind, q]) => (
+              <span
+                key={kind}
+                className="footer-message"
+                role="status"
+                title={q.error}
+              >
+                {kind === "member"
+                  ? "Permissions"
+                  : kind === "history"
+                    ? "Undo history"
+                    : "Cursors"}{" "}
+                {q.status === "error" ? "unavailable" : "reconnecting…"}
+              </span>
+            ))}
         <span className="footer-count">
           {parts.length} pieces<span>·</span>
           {state.connections.length} connections

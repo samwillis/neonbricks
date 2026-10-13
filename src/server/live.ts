@@ -1,5 +1,5 @@
 import { createRealtime, rawSql } from "@neon/realtime/server";
-import type { SceneRow, Viewer } from "../shared/types";
+import type { SceneRow, Viewer, Member } from "../shared/types";
 import type { Identity } from "./auth";
 export function realtime() {
   const secret = process.env.REALTIME_SECRET;
@@ -35,8 +35,32 @@ export function presenceQuery(world: string, a: Identity) {
   );
 }
 export function historyQuery(world: string, a: Identity) {
-  return rawSql<{ undo: string | null; redo: string | null }>(
-    `SELECT CASE WHEN h.generation=w.generation THEN h.undo->-1->>'id' ELSE NULL END AS undo,CASE WHEN h.generation=w.generation THEN h.redo->-1->>'id' ELSE NULL END AS redo FROM guest_world_history h JOIN worlds w ON w.id=h.world WHERE h.world=$1::uuid AND h.guest=$2::uuid AND ${access}`,
+  return rawSql<{
+    undo: string | null;
+    redo: string | null;
+    generation: number;
+  }>(
+    `SELECT CASE WHEN h.generation=w.generation THEN h.undo->-1->>'id' ELSE NULL END AS undo,CASE WHEN h.generation=w.generation THEN h.redo->-1->>'id' ELSE NULL END AS redo,w.generation FROM guest_world_history h JOIN worlds w ON w.id=h.world WHERE h.world=$1::uuid AND h.guest=$2::uuid AND ${access}`,
     [world, a.guest, a.session],
   );
+}
+
+export function memberQuery(world: string, a: Identity) {
+  return rawSql<Member>(
+    `SELECT g.id::text,g.name,g.color,m.role,(w.owner=g.id) AS can_reset FROM world_memberships m JOIN guests g ON g.id=m.guest JOIN worlds w ON w.id=m.world WHERE m.world=$1::uuid AND m.guest=$2::uuid AND ${access}`,
+    [world, a.guest, a.session],
+  );
+}
+
+export function trustedRealtime(debugMode = false) {
+  if (!process.env.REALTIME_SECRET || !process.env.REALTIME_URL)
+    throw new Error("Trusted Realtime configuration is required");
+  return createRealtime({
+    secret: process.env.REALTIME_SECRET,
+    debugMode,
+    url: process.env.REALTIME_URL,
+    db: decodeURIComponent(
+      new URL(process.env.DATABASE_URL!).pathname.slice(1),
+    ),
+  });
 }
