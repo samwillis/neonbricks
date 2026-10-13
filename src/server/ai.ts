@@ -9,7 +9,7 @@ import { neon } from "@neon/ai-sdk-provider";
 import { z } from "zod";
 import { compileBlueprint, type CompiledBlueprint } from "../shared/blueprint";
 import { COLORS } from "../shared/catalogue";
-import { MAX_AI_PARTS } from "../shared/types";
+import { MAX_AI_PARTS, type AIConversationRow } from "../shared/types";
 import {
   ASSEMBLIES,
   DesignError,
@@ -47,11 +47,34 @@ export const aiConfiguration = () => ({
   model: model(),
   version: AI_BUILDER_VERSION,
 });
-export const AI_BUILDER_VERSION = "workshop-chat-stream-3";
+export const AI_BUILDER_VERSION = "workshop-shared-chat-2";
 export const aiAvailable = () =>
   !!(process.env.NEON_AI_GATEWAY_TOKEN && process.env.NEON_AI_GATEWAY_BASE_URL);
 const publicColumns =
-  "id::text,prompt,model,status,attempt,error,world::text,source::text,target::text,preview,activity,preview_version,created_at::text,updated_at::text";
+  "g.id::text,g.prompt,g.model,g.status,g.attempt,g.error,g.world::text,g.source::text,g.target::text,g.preview,g.activity,g.preview_version,g.blueprint,g.guest::text AS author,author.name AS author_name,author.color AS author_color,g.created_at::text,g.updated_at::text";
+const conversationFrom =
+  "ai_generations g JOIN guests author ON author.id=g.guest";
+// Membership/session predicates stay in the live query, so withdrawal removes
+// previously visible conversation rows without waiting for capability renewal.
+const memberAccess = (world: string) =>
+  `EXISTS(SELECT 1 FROM world_memberships m JOIN guest_sessions s ON s.guest=m.guest WHERE m.world=${world} AND m.guest=$2::uuid AND m.active=1 AND s.id=$3::uuid AND s.revoked=0)`;
+
+async function generationAccess(
+  c: PoolClient,
+  a: Identity,
+  id: string,
+  editor = false,
+) {
+  const { rows } = await c.query(
+    "SELECT guest,target FROM ai_generations WHERE id=$1",
+    [id],
+  );
+  const row = rows[0];
+  if (!row) throw new DomainError("Build not found", 404);
+  if (row.target) await lockAccess(c, a, row.target, editor);
+  else if (row.guest !== a.guest) throw new DomainError("Build not found", 404);
+  return row;
+}
 export async function expireGenerations() {
   await pool.query(
     "UPDATE ai_generations SET status='failed',error='This build was interrupted. Please try again.',updated_at=clock_timestamp() WHERE status=ANY($1::text[]) AND lease_until<clock_timestamp()",
@@ -60,12 +83,14 @@ export async function expireGenerations() {
 }
 export async function getGeneration(a: Identity, id: string) {
   await expireGenerations();
-  const { rows } = await pool.query(
-    `SELECT ${publicColumns},blueprint,(SELECT slug FROM worlds WHERE id=target) AS target_slug FROM ai_generations WHERE id=$1 AND guest=$2`,
-    [id, a.guest],
-  );
-  if (!rows[0]) throw new DomainError("Build not found", 404);
-  const row = rows[0];
+  const row = await transaction(async (c) => {
+    await generationAccess(c, a, id);
+    const { rows } = await c.query(
+      `SELECT ${publicColumns},(SELECT slug FROM worlds WHERE id=g.target) AS target_slug FROM ${conversationFrom} WHERE g.id=$1`,
+      [id],
+    );
+    return rows[0];
+  });
   const compiled =
     row.blueprint && ["ready", "accepted"].includes(row.status)
       ? compileBlueprint(row.blueprint)
@@ -79,16 +104,15 @@ export async function getGeneration(a: Identity, id: string) {
   };
 }
 export function generationQuery(a: Identity, id: string) {
-  return rawSql<{
-    id: string;
-    status: string;
-    attempt: number;
-    error: string | null;
-    world: string | null;
-    updated_at: string;
-  }>(
-    `SELECT g.id::text,g.status,g.attempt,g.error,g.world::text,g.source::text,g.target::text,g.preview,g.activity,g.preview_version,g.updated_at::text FROM ai_generations g WHERE g.id=$1::uuid AND g.guest=$2::uuid AND EXISTS(SELECT 1 FROM guest_sessions s WHERE s.id=$3::uuid AND s.guest=g.guest AND s.revoked=0)`,
+  return rawSql<AIConversationRow>(
+    `SELECT ${publicColumns} FROM ${conversationFrom} WHERE g.id=$1::uuid AND ((g.target IS NOT NULL AND ${memberAccess("g.target")}) OR (g.target IS NULL AND g.guest=$2::uuid AND EXISTS(SELECT 1 FROM guest_sessions s WHERE s.id=$3::uuid AND s.guest=g.guest AND s.revoked=0)))`,
     [id, a.guest, a.session],
+  );
+}
+export function conversationQuery(a: Identity, world: string) {
+  return rawSql<AIConversationRow>(
+    `SELECT ${publicColumns} FROM ${conversationFrom} WHERE (g.target=$1::uuid OR (g.target IS NULL AND g.world=$1::uuid AND g.guest=$2::uuid)) AND ${memberAccess("$1::uuid")} ORDER BY g.created_at DESC,g.id DESC LIMIT 50`,
+    [world, a.guest, a.session],
   );
 }
 export async function createGeneration(
@@ -148,8 +172,25 @@ export async function createGeneration(
         [target, a.guest],
       );
     }
+    // Read-lock the source before taking workshop locks, matching application’s
+    // generation-first lock order and preventing cross-editor apply deadlocks.
+    const prior = input.source
+      ? await c.query(
+          "SELECT blueprint,design,target::text,snapshot,status FROM ai_generations WHERE id=$1 AND ((target=$3::uuid AND $3::uuid IS NOT NULL) OR (target IS NULL AND guest=$2)) AND status IN ('ready','accepted') FOR SHARE",
+          [input.source, a.guest, target],
+        )
+      : null;
     if (target) {
       await lockAccess(c, a, target);
+      const pending = await c.query(
+        "SELECT id FROM ai_generations WHERE target=$1 AND status=ANY($2::text[])",
+        [target, active],
+      );
+      if (pending.rowCount)
+        throw new DomainError(
+          "This workshop already has an AI build in progress",
+          409,
+        );
       snapshot = await workshopSnapshot(c, target);
       if (snapshot.parts.length > MAX_AI_PARTS)
         throw new DomainError(
@@ -158,19 +199,12 @@ export async function createGeneration(
       reference = workshopReference(snapshot);
     }
     if (input.source) {
-      const prior = await c.query(
-        "SELECT blueprint,design,target::text,snapshot,status FROM ai_generations WHERE id=$1 AND guest=$2 AND status IN ('ready','accepted') FOR SHARE",
-        [input.source, a.guest],
-      );
-      if (!prior.rows[0])
-        throw new DomainError("Reference model not found", 404);
-      if (
-        !target ||
-        (prior.rows[0].target === target && prior.rows[0].status === "ready")
-      ) {
-        reference = prior.rows[0].design || prior.rows[0].blueprint;
-        if (target) snapshot = prior.rows[0].snapshot;
-      } else if (prior.rows[0].target !== target)
+      const source = prior?.rows[0];
+      if (!source) throw new DomainError("Reference model not found", 404);
+      if (!target || (source.target === target && source.status === "ready")) {
+        reference = source.design || source.blueprint;
+        if (target) snapshot = source.snapshot;
+      } else if (source.target !== target)
         throw new DomainError("That draft belongs to another workshop", 409);
     }
     await c.query(
@@ -216,12 +250,16 @@ async function workshopSnapshot(
 }
 
 export async function listGenerations(a: Identity, target: string) {
-  await transaction((c) => lockAccess(c, a, target, false));
   await expireGenerations();
-  const { rows } = await pool.query(
-    `SELECT ${publicColumns},blueprint FROM ai_generations WHERE guest=$1 AND (target=$2 OR world=$2) ORDER BY created_at DESC LIMIT 50`,
-    [a.guest, target],
-  );
+  const rows = await transaction(async (c) => {
+    await lockAccess(c, a, target, false);
+    return (
+      await c.query(
+        `SELECT ${publicColumns} FROM ${conversationFrom} WHERE g.target=$1 OR (g.target IS NULL AND g.world=$1 AND g.guest=$2) ORDER BY g.created_at DESC,g.id DESC LIMIT 50`,
+        [target, a.guest],
+      )
+    ).rows;
+  });
   return rows.reverse().map((row) => ({
     ...row,
     parts:
@@ -486,10 +524,14 @@ export async function buildCandidate(
 
 export async function runGeneration(a: Identity, id: string) {
   await getGeneration(a, id);
-  const claimed = await pool.query(
-    "UPDATE ai_generations SET status='designing',lease_until=clock_timestamp()+interval '160 seconds',updated_at=clock_timestamp() WHERE id=$1 AND guest=$2 AND status='queued' RETURNING prompt,model,reference",
-    [id, a.guest],
-  );
+  const claimed = await transaction(async (c) => {
+    await c.query("SELECT id FROM ai_generations WHERE id=$1 FOR UPDATE", [id]);
+    await generationAccess(c, a, id, true);
+    return c.query(
+      "UPDATE ai_generations SET status='designing',lease_until=clock_timestamp()+interval '160 seconds',updated_at=clock_timestamp() WHERE id=$1 AND status='queued' RETURNING prompt,model,reference",
+      [id],
+    );
+  });
   if (!claimed.rows[0]) return getGeneration(a, id);
   const controller = new AbortController();
   controllers.set(id, controller);
@@ -567,15 +609,20 @@ export async function runGeneration(a: Identity, id: string) {
 
 export async function cancelGeneration(a: Identity, id: string) {
   await getGeneration(a, id);
-  await pool.query(
-    "WITH RECURSIVE drafts AS (SELECT id,source,target FROM ai_generations WHERE id=$1 AND guest=$2 AND status='ready' UNION ALL SELECT g.id,g.source,g.target FROM ai_generations g JOIN drafts d ON g.id=d.source WHERE g.guest=$2 AND g.status='ready' AND g.target IS NOT DISTINCT FROM d.target) UPDATE ai_generations SET status='cancelled',updated_at=clock_timestamp() WHERE guest=$2 AND (id=$1 OR id IN (SELECT id FROM drafts)) AND status=ANY($3::text[])",
-    [id, a.guest, [...active, "ready"]],
-  );
+  await transaction(async (c) => {
+    await c.query("SELECT id FROM ai_generations WHERE id=$1 FOR UPDATE", [id]);
+    const row = await generationAccess(c, a, id, true);
+    await c.query(
+      "WITH RECURSIVE drafts AS (SELECT id,source,target FROM ai_generations WHERE id=$1 AND status='ready' UNION ALL SELECT g.id,g.source,g.target FROM ai_generations g JOIN drafts d ON g.id=d.source WHERE g.status='ready' AND g.target IS NOT DISTINCT FROM d.target AND (g.target IS NOT NULL OR g.guest=$2)) UPDATE ai_generations SET status='cancelled',updated_at=clock_timestamp() WHERE (target=$4::uuid OR (target IS NULL AND guest=$2)) AND (id=$1 OR id IN (SELECT id FROM drafts)) AND status=ANY($3::text[])",
+      [id, a.guest, [...active, "ready"], row.target],
+    );
+  });
   controllers.get(id)?.abort();
   return getGeneration(a, id);
 }
 
 export async function acceptGeneration(a: Identity, id: string) {
+  await transaction((c) => generationAccess(c, a, id, true));
   const candidate = await getGeneration(a, id);
   if (candidate.status !== "ready" && candidate.status !== "accepted")
     throw new DomainError("This build isn't ready to use");
@@ -589,9 +636,10 @@ export async function acceptGeneration(a: Identity, id: string) {
     );
     if (!session.rows[0]) throw new DomainError("Session expired", 401);
     const { rows } = await c.query(
-      "SELECT status,world,blueprint,target,snapshot FROM ai_generations WHERE id=$1 AND guest=$2 FOR UPDATE",
-      [id, a.guest],
+      "SELECT status,world,blueprint,target,snapshot FROM ai_generations WHERE id=$1 FOR UPDATE",
+      [id],
     );
+    await generationAccess(c, a, id, true);
     const row = rows[0];
     if (row.status === "accepted") {
       const world = await c.query("SELECT slug FROM worlds WHERE id=$1", [

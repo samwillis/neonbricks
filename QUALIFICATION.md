@@ -144,6 +144,18 @@ A live browser run built a 44-piece cabin with an open doorway, chimney and pine
 
 The chat is private to its guest author; applied edits are shared with workshop collaborators. Function execution still uses a bounded HTTP invocation rather than a durable queue. These two successful requests verify this flow, not a general AI success rate or latency promise, and do not change the public-release gates below.
 
+## Shared workshop AI conversation — October 13
+
+Builder `workshop-shared-chat-2` makes targeted AI requests a workshop conversation. Current members see the latest 50 exchanges with author names and colours. Editors can create, resume, stop, refine and apply requests from any author in that workshop; viewers can read the conversation and watch the draft. Original untargeted builder drafts keep their author-only access. Existing targeted requests become shared without rewriting their data.
+
+One sealed live query now supplies the whole conversation, including newly inserted prompts, progress, previews, final summaries and application/cancellation state. The panel renders those snapshots directly; delayed HTTP responses cannot overwrite them. Membership withdrawal and session revocation empty the query, and denied capability renewal clears cached rows. The query uses the viewing member's session rather than the prompt author's session. Admission serializes competing reservations and allows one active build per workshop, alongside the existing global/per-guest controls.
+
+The first cross-editor application race exposed a lock-order inversion around the initial workshop-title update. AI actions now acquire generation locks before workshop locks. The corrected staging suite passes simultaneous application by multiple editors, with one operation and one winning editor's undo history; undo/redo remain valid. It also passes simultaneous reservations by two authors (one admitted), source refinement and cancellation across authors, discovery of new prompts in both members' subscriptions, author attribution, viewers' denied write actions, outsider denial, membership withdrawal, session revocation, and independence from an expired author's session. The existing no-inference AI lifecycle regression also passes, including old author-only drafts. No paid inference was needed for this change.
+
+All 106 unit tests and the production build pass. Two distinct browser guests opened the cabin QA workshop: the second guest saw both existing exchanges, then both sessions received a synthetic third-author prompt and drawings progressing from six to eighteen to forty-four pieces without reload. They received the same ready-draft controls. At 390 × 844 the chat sits below the canvas. Cleanup removed only that synthetic request; both sessions returned to the original two exchanges and the unchanged 44-piece, 107-connection cabin. Reload on the second guest restored the shared history. The viewport was restored and the extra browser tab closed. Screenshots are `artifacts/ai-shared-chat.png` and `artifacts/ai-shared-chat-mobile.png`.
+
+This checks independent browser sessions and a mobile viewport, not a physical-phone network or mobile-hardware qualification. A phone needs a frontend URL it can reach; the development URL on `127.0.0.1` is local to each device. The original user workshops were preserved. These checks do not change the capacity or public-release gates below.
+
 ## Remaining public-release work
 
 - Choose the frontend host/domain, add its exact origins, and verify its SPA routing and HTTPS deployment.

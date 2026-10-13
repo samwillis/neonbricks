@@ -16,6 +16,7 @@ import type {
   Edit,
   Receipt,
   AIGenerationProgress,
+  AIConversationRow,
 } from "../shared/types";
 import { sceneEntity } from "../shared/types";
 type Pending = {
@@ -35,6 +36,7 @@ type State = {
   name: string;
   color: string;
   canReset: boolean;
+  canBuildAI: boolean;
   pending: Pending[];
   history: { undo: string | null; redo: string | null };
   lastTx: string | null;
@@ -51,6 +53,7 @@ let state: State = {
   name: "",
   color: COLORS[0].hex,
   canReset: false,
+  canBuildAI: false,
   pending: [],
   history: { undo: null, redo: null },
   lastTx: null,
@@ -162,6 +165,55 @@ export async function watchGeneration(
     sub.unsubscribe();
   };
 }
+export async function watchConversation(
+  world: string,
+  receive: (rows: readonly AIConversationRow[]) => void,
+  reportError: (message: string) => void,
+) {
+  if (!client)
+    throw new Error("Wait for the workshop to connect, then try again.");
+  const currentClient = client;
+  let capability = await api<SealedLiveQuery<AIConversationRow>>(
+    `/worlds/${world}/live/ai`,
+  );
+  const sub = currentClient.subscribe(capability);
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const off = sub.onChange((snapshot) => {
+    if (stopped) return;
+    if (snapshot.status === "live") receive(snapshot.data || []);
+    else if (snapshot.error) reportError(snapshot.error.message);
+  });
+  const schedule = (delay: number) => {
+    timer = setTimeout(() => void renew(), delay);
+  };
+  const renew = async () => {
+    try {
+      const next = await api<SealedLiveQuery<AIConversationRow>>(
+        `/worlds/${world}/live/ai`,
+      );
+      if (stopped) return;
+      await sub.renew(next);
+      capability = next;
+      schedule(Math.max(1000, capability.expiresAt - serverNow() - 12000));
+    } catch (e) {
+      if (stopped) return;
+      if ([401, 403].includes((e as { status?: number }).status || 0)) {
+        receive([]);
+        reportError((e as Error).message);
+        return;
+      }
+      schedule(1000);
+    }
+  };
+  schedule(Math.max(1000, capability.expiresAt - serverNow() - 12000));
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    off();
+    sub.unsubscribe();
+  };
+}
 async function history() {
   if (!state.world) return;
   try {
@@ -215,6 +267,7 @@ export async function start(slug: string) {
       name: joined.name,
       color: joined.color,
       canReset: joined.canReset,
+      canBuildAI: joined.canBuildAI === true,
     });
     const url = import.meta.env.VITE_NEON_REALTIME_URL;
     if (!url) throw new Error("Realtime URL is missing. Check .env.local.");

@@ -122,7 +122,7 @@ export async function joinWorld(a: Identity, slug: string) {
       [w.id, a.guest],
     );
     const membership = await c.query(
-      "SELECT active FROM world_memberships WHERE world=$1 AND guest=$2 FOR SHARE",
+      "SELECT active,role FROM world_memberships WHERE world=$1 AND guest=$2 FOR SHARE",
       [w.id, a.guest],
     );
     if (!membership.rows[0].active)
@@ -143,6 +143,7 @@ export async function joinWorld(a: Identity, slug: string) {
       name: a.name,
       color: a.color,
       canReset: w.owner === a.guest,
+      canBuildAI: membership.rows[0].role === "editor",
       serverTime: Date.now(),
     };
   });

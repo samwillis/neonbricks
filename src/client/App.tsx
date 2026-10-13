@@ -1231,6 +1231,12 @@ export default function App() {
           <AIBuildPanel
             key={state.world.id}
             world={state.world.id}
+            guest={state.guest}
+            editable={
+              state.canBuildAI &&
+              state.status === "live" &&
+              state.world.status === "open"
+            }
             onClose={() => {
               setAiPanel(false);
               setAiDraft(null);

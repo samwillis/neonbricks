@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Check, LoaderCircle, Sparkles, X } from "lucide-react";
-import type { AIGeneration, AIGenerationProgress } from "../shared/types";
-import { newerGeneration } from "./ai-progress";
-import { api, watchGeneration } from "./store";
+import type { AIGeneration } from "../shared/types";
+import {
+  activeAIStates as activeStates,
+  conversationRows,
+  conversationState,
+} from "./ai-conversation";
+import { api, watchConversation } from "./store";
 
-const activeStates = ["queued", "designing", "checking", "repairing"];
 const stages: Record<string, string> = {
   queued: "Getting ready",
   designing: "Designing the model",
@@ -13,16 +16,19 @@ const stages: Record<string, string> = {
 };
 export default function AIBuildPanel({
   world,
+  guest,
+  editable,
   onClose,
   onPreview,
 }: {
   world: string;
+  guest: string;
+  editable: boolean;
   onClose: () => void;
   onPreview: (draft: AIGeneration | null) => void;
 }) {
   const [jobs, setJobs] = useState<AIGeneration[]>([]);
-  const [job, setJob] = useState<AIGeneration | null>(null);
-  const [preview, setPreview] = useState<AIGeneration | null>(null);
+  const { job, preview } = conversationState(jobs);
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -30,7 +36,6 @@ export default function AIBuildPanel({
   const [applying, setApplying] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [available, setAvailable] = useState<boolean | null>(null);
-  const latest = useRef<AIGeneration | null>(null);
   const mounted = useRef(true);
   const log = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
@@ -38,52 +43,39 @@ export default function AIBuildPanel({
   const busy = !!job && activeStates.includes(job.status);
   const drawing = busy && job?.preview?.parts.length ? job : preview;
 
-  function receive(row: AIGeneration | AIGenerationProgress) {
-    const previous = latest.current;
-    if (
-      !mounted.current ||
-      previous?.id !== row.id ||
-      !newerGeneration(previous, row)
-    )
-      return;
-    const next = { ...previous, ...row };
-    latest.current = next;
-    setJob(next);
-    setJobs((all) => all.map((r) => (r.id === next.id ? next : r)));
-    if (next.status === "ready") setPreview(next);
-    if (next.status === "accepted") setPreview(null);
-    if (next.status === "cancelled")
-      setPreview((prior) => (prior?.id === next.id ? null : prior));
-  }
   useEffect(() => {
     mounted.current = true;
-    void Promise.all([
-      api<AIGeneration[]>(`/worlds/${world}/ai`),
-      api<{ available: boolean }>("/ai/config"),
-    ])
-      .then(([rows, config]) => {
-        if (!mounted.current) return;
-        setAvailable(config.available);
-        setJobs(rows);
-        const current = rows.at(-1) || null;
-        latest.current = current;
-        setJob(current);
-        const lastApplied = rows.map((r) => r.status).lastIndexOf("accepted");
-        setPreview(
-          rows
-            .slice(lastApplied + 1)
-            .filter((r) => r.status === "ready")
-            .at(-1) || null,
-        );
+    let alive = true,
+      stop: (() => void) | undefined;
+    void api<{ available: boolean }>("/ai/config")
+      .then((config) => {
+        if (alive) setAvailable(config.available);
       })
       .catch((e) => {
-        if (mounted.current) setError(e.message);
+        if (alive) setError(e.message);
+      });
+    void watchConversation(
+      world,
+      (rows) => {
+        if (!alive) return;
+        setJobs(conversationRows(rows));
+        setLoading(false);
+      },
+      (message) => {
+        if (alive) setError(message);
+      },
+    )
+      .then((off) => {
+        if (alive) stop = off;
+        else off();
       })
-      .finally(() => {
-        if (mounted.current) setLoading(false);
+      .catch((e) => {
+        if (alive) setError(e.message);
       });
     return () => {
+      alive = false;
       mounted.current = false;
+      stop?.();
       onPreview(null);
     };
   }, [world, onPreview]);
@@ -93,17 +85,10 @@ export default function AIBuildPanel({
   useEffect(() => {
     const update = () =>
       setElapsed(
-        job
+        job?.created_at
           ? Math.max(
               0,
-              Math.floor(
-                (Date.now() -
-                  Date.parse(
-                    (job as AIGeneration & { created_at?: string })
-                      .created_at || new Date().toISOString(),
-                  )) /
-                  1000,
-              ),
+              Math.floor((Date.now() - Date.parse(job.created_at)) / 1000),
             )
           : 0,
       );
@@ -119,48 +104,20 @@ export default function AIBuildPanel({
     });
   }, [jobs.length, job?.status, error, preview?.id]);
   useEffect(() => {
-    if (!job) return;
-    let alive = true,
-      stop: (() => void) | undefined;
-    const refresh = () =>
-      api<AIGeneration>(`/ai/generations/${job.id}`)
-        .then((row) => {
-          if (alive) receive(row);
-        })
-        .catch(() => {});
-    void watchGeneration(job.id, (row) => {
-      if (!alive) return;
-      receive(row);
-      if (["ready", "accepted", "failed", "cancelled"].includes(row.status))
-        void refresh();
-    })
-      .then((off) => {
-        if (alive) stop = off;
-        else off();
-      })
-      .catch(() => {});
-    // Claiming is idempotent across reloads/tabs. The Function owns its deadline.
-    if (job.status === "queued")
-      void api<AIGeneration>(`/ai/generations/${job.id}/run`, {
+    if (!job || !busy) return;
+    // Any editor can resume a queued workshop request. One transactional claim
+    // wins across devices; all rendering continues to come from the live query.
+    if (job.status === "queued" && editable)
+      void api(`/ai/generations/${job.id}/run`, {
         method: "POST",
         signal: AbortSignal.timeout(175000),
-      })
-        .then((row) => {
-          if (alive) receive(row);
-        })
-        .catch(() => {
-          if (alive) void refresh();
-        });
+      }).catch(() => {});
+    // Reads expire evicted work; HTTP responses never overwrite live snapshots.
     const timer = setInterval(() => {
-      if (latest.current && activeStates.includes(latest.current.status))
-        void refresh();
+      void api(`/ai/generations/${job.id}`).catch(() => {});
     }, 5000);
-    return () => {
-      alive = false;
-      stop?.();
-      clearInterval(timer);
-    };
-  }, [job?.id]);
+    return () => clearInterval(timer);
+  }, [job?.id, job?.status === "queued", busy, editable]);
 
   async function send() {
     if (
@@ -168,6 +125,8 @@ export default function AIBuildPanel({
       busy ||
       loading ||
       applying ||
+      !editable ||
+      !available ||
       prompt.trim().length < 3
     )
       return;
@@ -177,7 +136,7 @@ export default function AIBuildPanel({
     const id = crypto.randomUUID(),
       text = prompt.trim();
     try {
-      const row = await api<AIGeneration>("/ai/generations", {
+      await api<AIGeneration>("/ai/generations", {
         method: "POST",
         body: JSON.stringify({
           id,
@@ -192,11 +151,7 @@ export default function AIBuildPanel({
           throw e;
         }
       });
-      if (!mounted.current) return;
-      latest.current = row;
-      setJob(row);
-      setJobs((all) => [...all, row]);
-      setPrompt("");
+      if (mounted.current) setPrompt("");
     } catch (e) {
       if (mounted.current) setError((e as Error).message);
     } finally {
@@ -205,19 +160,15 @@ export default function AIBuildPanel({
     }
   }
   async function cancel() {
-    if (!job) return;
+    if (!job || !editable) return;
     try {
-      receive(
-        await api<AIGeneration>(`/ai/generations/${job.id}/cancel`, {
-          method: "POST",
-        }),
-      );
+      await api(`/ai/generations/${job.id}/cancel`, { method: "POST" });
     } catch (e) {
       if (mounted.current) setError((e as Error).message);
     }
   }
   async function apply() {
-    if (!preview || busy || applying) return;
+    if (!preview || busy || applying || !editable) return;
     setApplying(true);
     setError("");
     try {
@@ -230,14 +181,6 @@ export default function AIBuildPanel({
         location.assign(`/w/${result.slug}?ai=1&frame=1`);
         return;
       }
-      const row = await api<AIGeneration>(`/ai/generations/${preview.id}`);
-      setJobs((all) => all.map((r) => (r.id === row.id ? row : r)));
-      if (latest.current?.id === row.id) {
-        latest.current = row;
-        setJob(row);
-      }
-      setPreview(null);
-      onPreview(null);
       composer.current?.focus();
     } catch (e) {
       if (mounted.current) setError((e as Error).message);
@@ -246,19 +189,10 @@ export default function AIBuildPanel({
     }
   }
   async function discard() {
-    if (!preview || busy || applying) return;
-    const id = preview.id;
+    if (!preview || busy || applying || !editable) return;
     try {
-      const row = await api<AIGeneration>(`/ai/generations/${id}/cancel`, {
-        method: "POST",
-      });
+      await api(`/ai/generations/${preview.id}/cancel`, { method: "POST" });
       if (!mounted.current) return;
-      setJobs((all) => all.map((r) => (r.id === id ? row : r)));
-      if (latest.current?.id === id) {
-        latest.current = row;
-        setJob(row);
-      }
-      setPreview(null);
       setError("");
       composer.current?.focus();
     } catch (e) {
@@ -305,7 +239,14 @@ export default function AIBuildPanel({
         )}
         {jobs.map((row) => (
           <div className="ai-exchange" key={row.id}>
-            <div className="ai-message-label">You</div>
+            <div className="ai-message-label">
+              <span
+                className="ai-author-dot"
+                style={{ background: row.author_color || "var(--green)" }}
+              />
+              {row.author_name || "Builder"}
+              {row.author === guest ? " · you" : ""}
+            </div>
             <p className="ai-user-message">{row.prompt}</p>
             <div className="ai-message-label ai-assistant-label">
               <Sparkles size={12} />
@@ -364,11 +305,11 @@ export default function AIBuildPanel({
       </div>
       {preview && !busy && (
         <div className="ai-chat-review">
-          <span>Previewing your draft</span>
+          <span>Previewing the workshop draft</span>
           <div>
             <button
               className="primary-button"
-              disabled={applying || submitting}
+              disabled={applying || submitting || !editable}
               onClick={() => void apply()}
             >
               {applying ? "Applying…" : "Apply to model"}
@@ -376,7 +317,7 @@ export default function AIBuildPanel({
             </button>
             <button
               className="ai-secondary"
-              disabled={applying || submitting}
+              disabled={applying || submitting || !editable}
               onClick={() => void discard()}
             >
               Keep current
@@ -415,7 +356,7 @@ export default function AIBuildPanel({
               : "What would you like to change?"
           }
           value={prompt}
-          disabled={loading || applying}
+          disabled={loading || applying || !editable}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => {
             if (
@@ -430,14 +371,17 @@ export default function AIBuildPanel({
         />
         <div className="ai-composer-actions">
           <small>
-            {busy
-              ? "You can write your next idea while I work."
-              : "Enter to send · Shift Enter for a new line"}
+            {!editable
+              ? "You can follow this workshop’s AI builds."
+              : busy
+                ? "You can write your next idea while I work."
+                : "Enter to send · Shift Enter for a new line"}
           </small>
           {busy ? (
             <button
               type="button"
               className="ai-secondary"
+              disabled={!editable}
               onClick={() => void cancel()}
             >
               Stop
@@ -447,6 +391,7 @@ export default function AIBuildPanel({
               className="ai-send"
               aria-label="Send build request"
               disabled={
+                !editable ||
                 !available ||
                 loading ||
                 submitting ||

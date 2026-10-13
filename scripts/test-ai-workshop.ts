@@ -5,7 +5,7 @@ import { createRealtimeClient } from "@neon/realtime/client";
 import { pool } from "../src/server/db";
 import { recordDrawing } from "../src/server/ai";
 import { compileBlueprint } from "../src/shared/blueprint";
-import type { AIGeneration, AIGenerationProgress } from "../src/shared/types";
+import type { AIGeneration, AIConversationRow } from "../src/shared/types";
 const base = process.env.VITE_API_URL!.replace(/\/$/, "");
 const ids: string[] = [];
 let world: string | undefined;
@@ -34,8 +34,15 @@ async function ok(token: string, path: string, body?: unknown) {
 }
 async function ready(id: string, blueprint: unknown) {
   await pool.query(
-    "UPDATE ai_generations SET status='ready',blueprint=$2::jsonb,lease_until=NULL,updated_at=clock_timestamp() WHERE id=$1",
-    [id, JSON.stringify(blueprint)],
+    "UPDATE ai_generations SET status='ready',blueprint=$2::jsonb,preview=$3::jsonb,preview_version=preview_version+1,lease_until=NULL,updated_at=clock_timestamp() WHERE id=$1",
+    [
+      id,
+      JSON.stringify(blueprint),
+      JSON.stringify({
+        parts: compileBlueprint(blueprint).parts,
+        title: "AI chat fixture",
+      }),
+    ],
   );
 }
 async function parts() {
@@ -84,7 +91,7 @@ try {
     color: "#289b74",
   });
   const b = await ok("", "/session", {
-    name: "AI chat outsider",
+    name: "AI chat collaborator",
     color: "#486fa4",
   });
   const id = randomUUID();
@@ -106,10 +113,76 @@ try {
     ).status,
     403,
   );
+  assert.equal((await request(b.token, `/ai/generations/${id}`)).status, 403);
+  assert.equal(
+    (await request(b.token, `/ai/generations/${id}/live`)).status,
+    403,
+  );
+  assert.equal(
+    (await request(b.token, `/worlds/${world}/live/ai`)).status,
+    403,
+  );
   await ok(a.token, `/worlds/${job.target_slug}/join`, {});
+  await ok(b.token, `/worlds/${job.target_slug}/join`, {});
+  const viewer = await ok("", "/session", {
+    name: "AI chat viewer",
+    color: "#486fa4",
+  });
+  await ok(viewer.token, `/worlds/${job.target_slug}/join`, {});
+  await pool.query(
+    "UPDATE world_memberships SET role='viewer' WHERE world=$1 AND guest=$2",
+    [world, viewer.guest],
+  );
+  assert.equal(
+    (await ok(viewer.token, `/worlds/${job.target_slug}/join`, {})).canBuildAI,
+    false,
+  );
+  assert.equal((await ok(viewer.token, `/worlds/${world}/ai`)).length, 1);
+  for (const action of ["run", "cancel", "accept"])
+    assert.equal(
+      (await request(viewer.token, `/ai/generations/${id}/${action}`, {}))
+        .status,
+      403,
+    );
+  assert.equal(
+    (
+      await request(viewer.token, "/ai/generations", {
+        id: randomUUID(),
+        prompt: "Viewer cannot build",
+        target: world,
+      })
+    ).status,
+    403,
+  );
+  const peerSub = client.subscribe<AIConversationRow>(
+    await ok(b.token, `/worlds/${world}/live/ai`),
+  );
+  await peerSub.awaitRows(
+    (rows) =>
+      rows.some(
+        (r) => r.id === id && r.author === a.guest && r.author_name === a.name,
+      ),
+    20000,
+  );
+  const deniedId = randomUUID();
+  assert.equal(
+    (
+      await request(b.token, "/ai/generations", {
+        id: deniedId,
+        prompt: "Competing workshop build",
+        target: world,
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (await pool.query("SELECT id FROM ai_generations WHERE id=$1", [deniedId]))
+      .rowCount,
+    0,
+  );
   assert.equal((await parts()).length, 0);
-  const sub = client.subscribe<AIGenerationProgress>(
-    await ok(a.token, `/ai/generations/${id}/live`),
+  const sub = client.subscribe<AIConversationRow>(
+    await ok(a.token, `/worlds/${world}/live/ai`),
   );
   await sub.awaitRows((rows) => rows.some((r) => r.status === "queued"), 20000);
   await pool.query("UPDATE ai_generations SET status='designing' WHERE id=$1", [
@@ -124,6 +197,10 @@ try {
     (rows) => rows.some((r) => r.preview?.parts.length === 1),
     20000,
   );
+  await peerSub.awaitRows(
+    (rows) => rows.some((r) => r.preview?.parts.length === 1),
+    20000,
+  );
   assert.equal(
     (await parts()).length,
     0,
@@ -131,8 +208,8 @@ try {
   );
   await ready(id, fixture);
   const accepted = await Promise.all(
-    Array.from({ length: 3 }, () =>
-      ok(a.token, `/ai/generations/${id}/accept`, {}),
+    [a, b, a].map((member) =>
+      ok(member.token, `/ai/generations/${id}/accept`, {}),
     ),
   );
   assert.equal(new Set(accepted.map((r) => r.slug)).size, 1);
@@ -143,7 +220,18 @@ try {
     false,
     "Accepted drafts reject late stream writes",
   );
-  const undo = await ok(a.token, `/worlds/${world}/edit`, {
+  await peerSub.awaitRows(
+    (rows) => rows.some((r) => r.id === id && r.status === "accepted"),
+    20000,
+  );
+  const operationOwner = (
+    await pool.query(
+      "SELECT guest FROM build_operations WHERE world=$1 AND id=$2",
+      [world, id],
+    )
+  ).rows[0].guest;
+  const applyingToken = operationOwner === a.guest ? a.token : b.token;
+  const undo = await ok(applyingToken, `/worlds/${world}/edit`, {
     operationId: randomUUID(),
     generation: 1,
     action: "undo",
@@ -151,7 +239,7 @@ try {
   });
   assert.equal(undo.accepted, true);
   assert.equal((await parts()).length, 0);
-  const redo = await ok(a.token, `/worlds/${world}/edit`, {
+  const redo = await ok(applyingToken, `/worlds/${world}/edit`, {
     operationId: randomUUID(),
     generation: 1,
     action: "redo",
@@ -162,11 +250,19 @@ try {
   const original = await parts();
   const refinementId = randomUUID();
   ids.push(refinementId);
-  await ok(a.token, "/ai/generations", {
+  await ok(b.token, "/ai/generations", {
     id: refinementId,
     prompt: "Make the roof blue",
     target: world,
   });
+  await sub.awaitRows(
+    (rows) => rows.some((r) => r.id === refinementId && r.author === b.guest),
+    20000,
+  );
+  await peerSub.awaitRows(
+    (rows) => rows.some((r) => r.id === refinementId && r.author === b.guest),
+    20000,
+  );
   const reference = (
     await pool.query("SELECT reference FROM ai_generations WHERE id=$1", [
       refinementId,
@@ -239,14 +335,14 @@ try {
     ])
   ).rows[0].reference;
   await ready(parent, parentRef);
-  await ok(a.token, "/ai/generations", {
+  await ok(b.token, "/ai/generations", {
     id: child,
     prompt: "Refine the unapplied draft",
     target: world,
     source: parent,
   });
   await ready(child, parentRef);
-  await ok(a.token, `/ai/generations/${child}/cancel`, {});
+  await ok(b.token, `/ai/generations/${child}/cancel`, {});
   const discarded = await pool.query(
     "SELECT status FROM ai_generations WHERE id=ANY($1::uuid[])",
     [[parent, child]],
@@ -255,14 +351,74 @@ try {
     discarded.rows.every((r) => r.status === "cancelled"),
     "Discarding a draft does not resurrect earlier unapplied drafts after reload",
   );
-  await ok(b.token, `/worlds/${job.target_slug}/join`, {});
+  const sharedHistory = await ok(b.token, `/worlds/${world}/ai`);
   assert.equal(
-    (await ok(b.token, `/worlds/${world}/ai`)).length,
-    0,
-    "Chat remains private to its author",
+    sharedHistory.length,
+    5,
+    "All members see the workshop conversation",
   );
+  assert.equal(
+    sharedHistory.find((r: AIConversationRow) => r.id === refinementId).author,
+    b.guest,
+  );
+  await peerSub.awaitRows(
+    (rows) =>
+      rows.filter(
+        (r) => (r.id === parent || r.id === child) && r.status === "cancelled",
+      ).length === 2,
+    20000,
+  );
+  const raceIds = [randomUUID(), randomUUID()];
+  ids.push(...raceIds);
+  const reservations = await Promise.all(
+    [a, b].map((member, i) =>
+      request(member.token, "/ai/generations", {
+        id: raceIds[i],
+        prompt: "Concurrent workshop reservation",
+        target: world,
+      }),
+    ),
+  );
+  assert.deepEqual(reservations.map((r) => r.status).sort(), [201, 409]);
+  const winner = reservations.find((r) => r.status === 201)!;
+  const otherEditor = winner.data.author === a.guest ? b : a;
+  await ok(otherEditor.token, `/ai/generations/${winner.data.id}/cancel`, {});
+  await pool.query(
+    "UPDATE world_memberships SET active=0 WHERE world=$1 AND guest=$2",
+    [world, b.guest],
+  );
+  await peerSub.awaitRows((rows) => rows.length === 0, 20000);
+  for (const path of [
+    `/worlds/${world}/ai`,
+    `/worlds/${world}/live/ai`,
+    `/ai/generations/${refinementId}`,
+  ])
+    assert.equal((await request(b.token, path)).status, 403);
+  for (const action of ["cancel", "accept"])
+    assert.equal(
+      (await request(b.token, `/ai/generations/${parent}/${action}`, {}))
+        .status,
+      403,
+    );
+  // A different session loses its own subscription on revocation; the author's
+  // session does not control collaborators' access to workshop chat.
+  const viewerSub = client.subscribe<AIConversationRow>(
+    await ok(viewer.token, `/worlds/${world}/live/ai`),
+  );
+  await viewerSub.awaitRows((rows) => rows.length === 6, 20000);
+  await pool.query("UPDATE guest_sessions SET revoked=1 WHERE guest=$1", [
+    a.guest,
+  ]);
+  await viewerSub.awaitRows((rows) => rows.length === 6, 20000);
+  await pool.query("UPDATE guest_sessions SET revoked=1 WHERE guest=$1", [
+    viewer.guest,
+  ]);
+  await viewerSub.awaitRows((rows) => rows.length === 0, 20000);
+  viewerSub.unsubscribe();
+  peerSub.unsubscribe();
+  sub.unsubscribe();
   console.log(
-    "AI chat lifecycle passed: blank workshop, idempotency, private history, Realtime drawings, atomic same-model apply, undo/redo, identity-preserving refinement, concurrent-edit conflict, and late-stream rejection. No inference calls.",
+    "AI chat lifecycle passed: blank workshop, idempotency, shared authored history, peer prompt discovery and drawings, viewer permissions, withdrawal/revocation, workshop concurrency, atomic same-model apply, undo/redo, identity-preserving refinement, concurrent-edit conflict, and late-stream rejection. No inference calls.",
   );
 } finally {
   client.close();

@@ -25,6 +25,7 @@ import {
   createGeneration,
   getGeneration,
   listGenerations,
+  conversationQuery,
   runGeneration,
   cancelGeneration,
   acceptGeneration,
@@ -255,6 +256,10 @@ app.get("/api/worlds/:world/live/:kind", async (c) => {
     return c.json(await realtime().seal({ query: presenceQuery(world, a) }));
   if (kind === "history")
     return c.json(await realtime().seal({ query: historyQuery(world, a) }));
+  if (kind === "ai")
+    return c.json(
+      await realtime().seal({ query: conversationQuery(a, world) }),
+    );
   throw new DomainError("Unknown query", 404);
 });
 app.post("/api/worlds/:world/edit", async (c) =>

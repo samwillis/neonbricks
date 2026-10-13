@@ -1426,6 +1426,12 @@ input:focus-visible {
   color: var(--muted);
   line-height: 1.65;
 }
+.ai-author-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
 .ai-chat-result {
   display: flex;
   align-items: center;

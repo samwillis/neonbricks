@@ -6,7 +6,7 @@ The demo includes 36 procedural parts, 12 colours, a starter rover and workbench
 
 Mechanical assemblies are static. Axles and pins fit authored holes; gears have fixed cardinal mesh poses; hinge leaves pair in a coplanar pose. Free-angle joints, physical simulation, and motors belong to the subsequent phases in [PLAN.md](PLAN.md).
 
-The workshop menu also includes **Build with AI**: a prompt opens a new canvas, where completed pieces appear while Neon AI Gateway designs the model. A persistent **AI** side chat supports follow-up instructions in any workshop, including models you have edited by hand. Review each draft, then apply it to the same model as one undoable edit. Compact repetitions and verified assemblies expand to ordinary editable pieces. Progress, drawings and chat live in Postgres and arrive through Realtime. See [AI_BUILDING.md](AI_BUILDING.md) for the format, limits and setup.
+The workshop menu also includes **Build with AI**: a prompt opens a new canvas, where completed pieces appear while Neon AI Gateway designs the model. A shared **AI** side chat supports follow-up instructions in any workshop, including models you have edited by hand. Workshop members see the same authored conversation and streamed draft across devices through Realtime. Review each draft, then apply it to the same model as one undoable edit. Compact repetitions and verified assemblies expand to ordinary editable pieces. Progress, drawings and chat live in Postgres and arrive through Realtime. See [AI_BUILDING.md](AI_BUILDING.md) for the format, limits and setup.
 
 ## Run the existing staging demo
 

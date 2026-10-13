@@ -28,7 +28,12 @@ export type AIGeneration = AIGenerationProgress & {
   parts: Part[];
   blueprint: { title: string; summary: string } | null;
   target_slug?: string | null;
+  author?: string;
+  author_name?: string;
+  author_color?: string;
+  created_at?: string;
 };
+export type AIConversationRow = Omit<AIGeneration, "parts">;
 export type Part = {
   id: string;
   key: string;
