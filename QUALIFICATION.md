@@ -1,6 +1,6 @@
 # Implementation and qualification
 
-Recorded 12–13 October 2026. This is the built staging demo; public frontend release is still a separate deployment step.
+Recorded 12–13 October 2026. This is the built demo: the frontend is published on Vercel, and its backend remains in the Sam Neon staging workspace. The release checks below are still qualification limits, not a claim of production readiness.
 
 ## Foundation decisions
 
@@ -156,9 +156,16 @@ All 106 unit tests and the production build pass. Two distinct browser guests op
 
 This checks independent browser sessions and a mobile viewport, not a physical-phone network or mobile-hardware qualification. A phone needs a frontend URL it can reach; the development URL on `127.0.0.1` is local to each device. The original user workshops were preserved. These checks do not change the capacity or public-release gates below.
 
+## Vercel frontend — October 13
+
+The static frontend is published at <https://neonbricks-app.vercel.app>, in Vercel project `neonbricks-app` under `samwillis-projects`. The verified hostname is attached to the project for future production deployments. The previous temporary hostname redirects with HTTP 308, preserving workshop paths and query strings. Functions, Postgres, Realtime and AI Gateway remain on the existing Sam staging branch.
+
+The uploaded Build Output API bundle contains only static assets and SPA routing, with no Vercel Functions. Only the two public frontend endpoint variables are configured in Vercel; backend credentials are excluded from the bundle. The exact new origin was applied to Function CORS and Realtime. Anonymous requests to the home page, workshop deep link and all three JS/CSS assets returned 200; Function preflight returned 204 with the correct allowed origin.
+
+A new guest on the hosted cabin workshop restored 44 pieces, 107 connections and both shared AI exchanges, and showed **Live & saved**. At 390 × 844, the chat appeared below the canvas with no horizontal page overflow. The viewport was restored. Screenshots are `artifacts/neonbricks-vercel.png` and `artifacts/neonbricks-vercel-mobile.png`. Verification made no scene edits or paid inference calls. Type checking, the production build and `git diff --check` pass. Physical-phone hardware and network behaviour remain unqualified, as does the public capacity gate below.
+
 ## Remaining public-release work
 
-- Choose the frontend host/domain, add its exact origins, and verify its SPA routing and HTTPS deployment.
 - Resolve the latency/workload release gate and measure local preview latency and bulk-edit visibility separately.
 - Include continuous preview and cursor traffic, cold wake-up, and client memory/subscription growth in final capacity and long-session qualification.
 - Rehearse recovery from a prior compatible application release once this first runnable baseline has a successor.

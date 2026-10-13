@@ -1,7 +1,7 @@
 import { defineConfig } from "@neon/config/v1";
 const origins = (
   process.env.ALLOWED_ORIGINS ||
-  "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
+  "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,https://neonbricks-app.vercel.app"
 ).split(",");
 export default defineConfig({
   aiGateway: true,

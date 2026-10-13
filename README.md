@@ -8,6 +8,10 @@ Mechanical assemblies are static. Axles and pins fit authored holes; gears have 
 
 The workshop menu also includes **Build with AI**: a prompt opens a new canvas, where completed pieces appear while Neon AI Gateway designs the model. A shared **AI** side chat supports follow-up instructions in any workshop, including models you have edited by hand. Workshop members see the same authored conversation and streamed draft across devices through Realtime. Review each draft, then apply it to the same model as one undoable edit. Compact repetitions and verified assemblies expand to ordinary editable pieces. Progress, drawings and chat live in Postgres and arrive through Realtime. See [AI_BUILDING.md](AI_BUILDING.md) for the format, limits and setup.
 
+## Hosted demo
+
+Open [neonbricks-app.vercel.app](https://neonbricks-app.vercel.app). Vercel serves only the static frontend. It connects directly to the existing Neon Function, Realtime, Postgres and AI Gateway in the **Sam staging workspace**. Workshop URLs can be shared across devices, and their AI conversation and drafts sync through Postgres and Realtime.
+
 ## Run the existing staging demo
 
 Requirements: Node 22.18 or newer. The unpublished SDK packages are included as pinned tarballs in `.sdk/`, so the app does not need the CLI to run.
@@ -85,13 +89,24 @@ For another environment, copy `.env.example` to a private env file, link a proje
 ```sh
 npm run db:migrate
 npm run neon -- config plan --env .env.local
-npm run neon -- deploy --env .env.local --no-env-pull
+npm run neon -- deploy --env .env.local --no-env-pull --update-existing
 npm run build
 ```
 
 Migrations use the direct connection and verify TLS certificates. The app reuses a module-level `pg` pool. `neon.ts` declares the Function, its secrets, permitted origins, and a five-minute authenticated cleanup trigger. Review the plan before applying changes to another branch.
 
-For frontend hosting, publish `dist/` with SPA fallback to `index.html`, build with the two public `VITE_*` variables, and add the chosen HTTPS origin to both Function CORS and Realtime's allowed origins. The frontend has not yet been published to an external host.
+The frontend is deployed to Vercel project **neonbricks-app** in **samwillis-projects**, at <https://neonbricks-app.vercel.app>. `vercel.json` declares the Vite build, `dist/` output and SPA fallback. Vercel stores only `VITE_API_URL` and `VITE_NEON_REALTIME_URL`; database, sealing and Gateway credentials stay on Neon. The exact production origin is included in Function CORS and Realtime's allowed origins. Other Vercel aliases and preview URLs need their own explicit origin allowance before they can connect.
+
+To republish the frontend:
+
+```sh
+vercel link --yes --project neonbricks-app --scope samwillis-projects
+vercel env pull .env.production.local --environment=production --yes --scope samwillis-projects
+npm run build:vercel
+vercel deploy --prebuilt --prod --yes --scope samwillis-projects
+```
+
+`build:vercel` packages the verified Vite build using Vercel's Build Output API. Uploads contain only static assets, with filesystem routing followed by the SPA fallback and no Vercel Functions. `.vercel/` and private env files are ignored. The project currently deploys through the CLI; GitHub push-triggered deployment is not connected.
 
 After a release, keep its Git commit, pinned SDK tarballs, private environment file, and migration journal. To recover an earlier compatible application version, check out its commit in a separate checkout, install its lockfile, build the frontend, review the staging config plan, and redeploy its Function and frontend together. Preserve the database and receipts. Schema and catalogue changes need a forward-compatible migration before rolling application code back; the current schema has no destructive down-migration. The initial demo establishes the first runnable recovery baseline, so a previous-release rollback rehearsal remains a public-release check.
 

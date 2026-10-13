@@ -8,6 +8,7 @@
     "dev:api": "node --env-file-if-exists=.env.local --import tsx --watch src/server/local.ts",
     "dev:web": "vite --host 127.0.0.1",
     "build": "npm run typecheck && vite build",
+    "build:vercel": "npm run build && node scripts/prepare-vercel.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:db": "node --env-file=.env.local --import tsx scripts/test-db.ts",
