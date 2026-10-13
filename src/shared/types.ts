@@ -16,12 +16,18 @@ export type AIGenerationProgress = {
   error: string | null;
   world: string | null;
   updated_at?: string;
+  source?: string | null;
+  target?: string | null;
+  activity?: string | null;
+  preview_version?: number;
+  preview?: { parts: Part[]; title: string } | null;
 };
 export type AIGeneration = AIGenerationProgress & {
   prompt: string;
   model: string;
   parts: Part[];
   blueprint: { title: string; summary: string } | null;
+  target_slug?: string | null;
 };
 export type Part = {
   id: string;

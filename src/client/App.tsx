@@ -36,6 +36,7 @@ import {
 import * as THREE from "three";
 import Scene, { type FrameMetrics } from "./Scene";
 import AIBuildDialog from "./AIBuildDialog";
+import AIBuildPanel from "./AIBuildPanel";
 import {
   CATALOGUE,
   BY_KEY,
@@ -43,7 +44,7 @@ import {
   type Definition,
 } from "../shared/catalogue";
 import { bounds } from "../shared/geometry";
-import type { Part, Preview, Position } from "../shared/types";
+import type { AIGeneration, Part, Preview, Position } from "../shared/types";
 import {
   useWorkshop,
   start,
@@ -122,6 +123,10 @@ export default function App() {
   const { theme, preference, setPreference } = useTheme();
   const [displayMenu, setDisplayMenu] = useState(false);
   const [aiDialog, setAiDialog] = useState(false);
+  const [aiPanel, setAiPanel] = useState(
+    new URLSearchParams(location.search).has("ai"),
+  );
+  const [aiDraft, setAiDraft] = useState<AIGeneration | null>(null);
   const displayControl = useRef<HTMLDivElement>(null);
   const displayButton = useRef<HTMLButtonElement>(null);
   const inspectorButton = useRef<HTMLButtonElement>(null);
@@ -250,7 +255,8 @@ export default function App() {
         ? v.preview
         : null,
   }));
-  const canEdit = state.status === "live" && state.world?.status === "open";
+  const canEdit =
+    state.status === "live" && state.world?.status === "open" && !aiDraft;
   const filtered = CATALOGUE.filter(
     (d) =>
       (category === "All" || d.category === category) &&
@@ -671,6 +677,20 @@ export default function App() {
           )}
         </div>
         <div className="header-spacer" />
+        <button
+          className={`ai-chat-toggle ${aiPanel ? "active" : ""}`}
+          disabled={!state.guest}
+          aria-label="AI chat"
+          aria-expanded={aiPanel}
+          title="Ask AI to change this model"
+          onClick={() => {
+            cancel();
+            setAiPanel((v) => !v);
+          }}
+        >
+          <Sparkles size={16} />
+          <span>AI</span>
+        </button>
         <div
           className="collaborators"
           title={viewers.map((v) => v.name).join(", ")}
@@ -794,131 +814,145 @@ export default function App() {
           )}
         </div>
       </header>
-      <div className="workspace">
-        <aside className="drawer">
-          <div className="drawer-heading">
-            <div>
-              <h1>
-                Parts<span>.</span>
-              </h1>
-            </div>
-            <span className="count-badge">36</span>
-          </div>
-          <div className="search">
-            <Search size={16} />
-            <input
-              aria-label="Search parts"
-              placeholder="Search parts…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            {search && (
-              <button aria-label="Clear search" onClick={() => setSearch("")}>
-                <X size={13} />
-              </button>
-            )}
-          </div>
-          <div className="categories">
-            {["All", "Bricks", "Plates", "Mechanics"].map((name) => (
-              <button
-                key={name}
-                className={category === name ? "chosen" : ""}
-                onClick={() => setCategory(name)}
-                title={name}
-                aria-pressed={category === name}
-              >
-                <span>{name}</span>
-              </button>
-            ))}
-          </div>
-          <div className="parts-list">
-            <div className="parts-grid">
-              {filtered.map((d) => (
-                <button
-                  key={d.key}
-                  className={`part-card ${tool === "build" && key === d.key ? "picked" : ""}`}
-                  data-testid={`part-${d.key}`}
-                  aria-label={`Build with ${d.name}`}
-                  onClick={() => beginBuild(d)}
-                >
-                  <span className="part-thumb">
-                    <Thumb def={d} theme={theme} />
-                    {tool === "build" && key === d.key && (
-                      <span className="pick-mark">
-                        <Check size={10} />
-                      </span>
-                    )}
-                  </span>
-                  <span className="part-name">{d.name}</span>
-                  <span className="part-measure">
-                    {d.w} × {d.d}
-                    {d.category === "Mechanics" && (
-                      <span className="mechanic-dot" />
-                    )}
-                  </span>
-                </button>
-              ))}
-            </div>
-            {filtered.length === 0 && (
-              <div className="no-parts">
-                No pieces found.
-                <button
-                  onClick={() => {
-                    setSearch("");
-                    setCategory("All");
-                  }}
-                >
-                  Show all pieces
-                </button>
+      <div className={`workspace ${aiPanel ? "with-ai-chat" : ""}`}>
+        {!aiPanel && (
+          <aside className="drawer">
+            <div className="drawer-heading">
+              <div>
+                <h1>
+                  Parts<span>.</span>
+                </h1>
               </div>
-            )}
-          </div>
-          <div className="color-drawer">
-            <div className="section-label">
-              <span>Colour</span>
-              <span>{COLORS.find((c) => c.hex === color)?.name}</span>
+              <span className="count-badge">36</span>
             </div>
-            <div className="swatches">
-              {COLORS.map((c) => (
+            <div className="search">
+              <Search size={16} />
+              <input
+                aria-label="Search parts"
+                placeholder="Search parts…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              {search && (
+                <button aria-label="Clear search" onClick={() => setSearch("")}>
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+            <div className="categories">
+              {["All", "Bricks", "Plates", "Mechanics"].map((name) => (
                 <button
-                  key={c.hex}
-                  className={`swatch ${color === c.hex ? "picked" : ""}`}
-                  style={{ background: c.hex }}
-                  title={c.name}
-                  aria-label={`Colour ${c.name}`}
-                  onClick={() => void chooseColor(c.hex)}
+                  key={name}
+                  className={category === name ? "chosen" : ""}
+                  onClick={() => setCategory(name)}
+                  title={name}
+                  aria-pressed={category === name}
                 >
-                  {color === c.hex && (
-                    <Check
-                      size={13}
-                      color={
-                        ["#eee8dc", "#edbc46", "#9fc5b4"].includes(c.hex)
-                          ? "#354a40"
-                          : "white"
-                      }
-                    />
-                  )}
+                  <span>{name}</span>
                 </button>
               ))}
             </div>
-          </div>
-        </aside>
+            <div className="parts-list">
+              <div className="parts-grid">
+                {filtered.map((d) => (
+                  <button
+                    key={d.key}
+                    className={`part-card ${tool === "build" && key === d.key ? "picked" : ""}`}
+                    data-testid={`part-${d.key}`}
+                    aria-label={`Build with ${d.name}`}
+                    onClick={() => beginBuild(d)}
+                  >
+                    <span className="part-thumb">
+                      <Thumb def={d} theme={theme} />
+                      {tool === "build" && key === d.key && (
+                        <span className="pick-mark">
+                          <Check size={10} />
+                        </span>
+                      )}
+                    </span>
+                    <span className="part-name">{d.name}</span>
+                    <span className="part-measure">
+                      {d.w} × {d.d}
+                      {d.category === "Mechanics" && (
+                        <span className="mechanic-dot" />
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {filtered.length === 0 && (
+                <div className="no-parts">
+                  No pieces found.
+                  <button
+                    onClick={() => {
+                      setSearch("");
+                      setCategory("All");
+                    }}
+                  >
+                    Show all pieces
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="color-drawer">
+              <div className="section-label">
+                <span>Colour</span>
+                <span>{COLORS.find((c) => c.hex === color)?.name}</span>
+              </div>
+              <div className="swatches">
+                {COLORS.map((c) => (
+                  <button
+                    key={c.hex}
+                    className={`swatch ${color === c.hex ? "picked" : ""}`}
+                    style={{ background: c.hex }}
+                    title={c.name}
+                    aria-label={`Colour ${c.name}`}
+                    onClick={() => void chooseColor(c.hex)}
+                  >
+                    {color === c.hex && (
+                      <Check
+                        size={13}
+                        color={
+                          ["#eee8dc", "#edbc46", "#9fc5b4"].includes(c.hex)
+                            ? "#354a40"
+                            : "white"
+                        }
+                      />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </aside>
+        )}
         <main className="stage">
           <Scene
             theme={theme}
-            parts={parts}
-            selected={selected}
-            ghosts={ghosts}
+            parts={
+              aiDraft?.status === "ready" && aiDraft.parts.length
+                ? aiDraft.parts
+                : aiDraft?.preview?.parts || parts
+            }
+            selected={aiDraft ? [] : selected}
+            ghosts={aiDraft ? [] : ghosts}
             valid={valid}
-            viewers={remote}
+            viewers={aiDraft ? [] : remote}
             guest={getViewerId()}
             generation={state.world?.generation || 1}
             grid={grid}
             quality={quality}
-            cameraMode={camera}
-            frameParts={new URLSearchParams(location.search).has("frame")}
+            cameraMode={
+              aiDraft?.status === "ready" && camera.startsWith("iso")
+                ? `${camera}:${aiDraft.id}:ready`
+                : camera
+            }
+            frameParts={
+              aiDraft
+                ? aiDraft.status === "ready"
+                : new URLSearchParams(location.search).has("frame")
+            }
             presentation={presentation}
-            selectMode={tool === "select"}
+            selectMode={tool === "select" && !aiDraft}
             canMove={canEdit && !state.pending.length}
             dragging={!!drag}
             onGrab={grab}
@@ -932,6 +966,7 @@ export default function App() {
           />
           {welcome &&
             !presentation &&
+            !aiPanel &&
             tool === "select" &&
             !selection.length && (
               <div className="welcome-note">
@@ -966,21 +1001,34 @@ export default function App() {
               </button>
             </div>
           </div>
-          {!presentation && selection.length > 0 && tool === "select" && (
-            <div className="selection-card">
+          {aiDraft && (
+            <div className="ai-canvas-status">
+              <Sparkles size={14} />
               <span>
-                {selection.length === 1
-                  ? BY_KEY[selection[0].key]?.name
-                  : `${selection.length} pieces selected`}
+                {aiDraft.status === "ready"
+                  ? "Draft preview · ready to apply"
+                  : `${aiDraft.activity || "Building your draft"} · preview`}
               </span>
-              <button
-                aria-label="Clear selection"
-                onClick={() => setSelected([])}
-              >
-                <X size={14} />
-              </button>
             </div>
           )}
+          {!presentation &&
+            !aiDraft &&
+            selection.length > 0 &&
+            tool === "select" && (
+              <div className="selection-card">
+                <span>
+                  {selection.length === 1
+                    ? BY_KEY[selection[0].key]?.name
+                    : `${selection.length} pieces selected`}
+                </span>
+                <button
+                  aria-label="Clear selection"
+                  onClick={() => setSelected([])}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
           {!presentation && (
             <div className="build-hint">
               {tool === "build" ? (
@@ -1179,6 +1227,17 @@ export default function App() {
             </div>
           )}
         </main>
+        {aiPanel && state.world && (
+          <AIBuildPanel
+            key={state.world.id}
+            world={state.world.id}
+            onClose={() => {
+              setAiPanel(false);
+              setAiDraft(null);
+            }}
+            onPreview={setAiDraft}
+          />
+        )}
       </div>
       <footer className="footer">
         <span className="connection-status">

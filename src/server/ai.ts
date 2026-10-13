@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  generateText,
+  streamText,
   Output,
   NoObjectGeneratedError,
   NoOutputGeneratedError,
@@ -22,10 +22,19 @@ import {
 } from "../shared/design";
 import { bounds } from "../shared/geometry";
 import { snapDesign, type DesignAdjustment } from "../shared/design-fit";
-import { DomainError, type Identity } from "./auth";
+import { DomainError, lockAccess, type Identity } from "./auth";
 import { pool, transaction } from "./db";
 import { aiBuildErrorMessage } from "./ai-errors";
-import { insertWorld } from "./worlds";
+import { insertWorld, partFromRow } from "./worlds";
+import { executeInTransaction } from "./commands";
+import {
+  aiWorkshopEdit,
+  streamingPreview,
+  workshopReference,
+  sameAISnapshot,
+  type AISnapshot,
+} from "../shared/ai-workshop";
+import type { PoolClient } from "pg";
 import { rawSql } from "@neon/realtime/server";
 
 const active = ["queued", "designing", "checking", "repairing"];
@@ -38,11 +47,11 @@ export const aiConfiguration = () => ({
   model: model(),
   version: AI_BUILDER_VERSION,
 });
-export const AI_BUILDER_VERSION = "design-v2-patches-4";
+export const AI_BUILDER_VERSION = "workshop-chat-stream-3";
 export const aiAvailable = () =>
   !!(process.env.NEON_AI_GATEWAY_TOKEN && process.env.NEON_AI_GATEWAY_BASE_URL);
 const publicColumns =
-  "id::text,prompt,model,status,attempt,error,world::text,source::text,created_at::text,updated_at::text";
+  "id::text,prompt,model,status,attempt,error,world::text,source::text,target::text,preview,activity,preview_version,created_at::text,updated_at::text";
 export async function expireGenerations() {
   await pool.query(
     "UPDATE ai_generations SET status='failed',error='This build was interrupted. Please try again.',updated_at=clock_timestamp() WHERE status=ANY($1::text[]) AND lease_until<clock_timestamp()",
@@ -52,7 +61,7 @@ export async function expireGenerations() {
 export async function getGeneration(a: Identity, id: string) {
   await expireGenerations();
   const { rows } = await pool.query(
-    `SELECT ${publicColumns},blueprint FROM ai_generations WHERE id=$1 AND guest=$2`,
+    `SELECT ${publicColumns},blueprint,(SELECT slug FROM worlds WHERE id=target) AS target_slug FROM ai_generations WHERE id=$1 AND guest=$2`,
     [id, a.guest],
   );
   if (!rows[0]) throw new DomainError("Build not found", 404);
@@ -78,13 +87,19 @@ export function generationQuery(a: Identity, id: string) {
     world: string | null;
     updated_at: string;
   }>(
-    `SELECT g.id::text,g.status,g.attempt,g.error,g.world::text,g.updated_at::text FROM ai_generations g WHERE g.id=$1::uuid AND g.guest=$2::uuid AND EXISTS(SELECT 1 FROM guest_sessions s WHERE s.id=$3::uuid AND s.guest=g.guest AND s.revoked=0)`,
+    `SELECT g.id::text,g.status,g.attempt,g.error,g.world::text,g.source::text,g.target::text,g.preview,g.activity,g.preview_version,g.updated_at::text FROM ai_generations g WHERE g.id=$1::uuid AND g.guest=$2::uuid AND EXISTS(SELECT 1 FROM guest_sessions s WHERE s.id=$3::uuid AND s.guest=g.guest AND s.revoked=0)`,
     [id, a.guest, a.session],
   );
 }
 export async function createGeneration(
   a: Identity,
-  input: { id: string; prompt: string; source?: string },
+  input: {
+    id: string;
+    prompt: string;
+    source?: string;
+    target?: string;
+    newWorld?: boolean;
+  },
 ) {
   if (!aiAvailable())
     throw new DomainError("AI building is not configured yet", 503);
@@ -93,14 +108,15 @@ export async function createGeneration(
     // This lock only serializes AI concurrency admission, never workshop edits.
     await c.query("SELECT pg_advisory_xact_lock(729411)");
     const existing = await c.query(
-      "SELECT guest,prompt,source::text FROM ai_generations WHERE id=$1",
+      "SELECT guest,prompt,source::text,target::text FROM ai_generations WHERE id=$1",
       [input.id],
     );
     if (existing.rows[0]) {
       if (
         existing.rows[0].guest !== a.guest ||
         existing.rows[0].prompt !== input.prompt ||
-        existing.rows[0].source !== (input.source || null)
+        existing.rows[0].source !== (input.source || null) ||
+        (input.target && existing.rows[0].target !== input.target)
       )
         throw new DomainError("Build request already used");
       return;
@@ -118,17 +134,47 @@ export async function createGeneration(
         429,
       );
     let reference: unknown = null;
+    let target = input.target || null;
+    let snapshot: AISnapshot | null = null;
+    if (input.newWorld) {
+      const world = await insertWorld(c, "Building with AI", a.guest);
+      target = world.id;
+      await c.query(
+        "INSERT INTO world_memberships(world,guest) VALUES($1,$2)",
+        [target, a.guest],
+      );
+      await c.query(
+        "INSERT INTO guest_world_history(world,guest,generation) VALUES($1,$2,1)",
+        [target, a.guest],
+      );
+    }
+    if (target) {
+      await lockAccess(c, a, target);
+      snapshot = await workshopSnapshot(c, target);
+      if (snapshot.parts.length > MAX_AI_PARTS)
+        throw new DomainError(
+          `AI editing supports models of up to ${MAX_AI_PARTS} pieces`,
+        );
+      reference = workshopReference(snapshot);
+    }
     if (input.source) {
       const prior = await c.query(
-        "SELECT blueprint,design FROM ai_generations WHERE id=$1 AND guest=$2 AND status IN ('ready','accepted') FOR SHARE",
+        "SELECT blueprint,design,target::text,snapshot,status FROM ai_generations WHERE id=$1 AND guest=$2 AND status IN ('ready','accepted') FOR SHARE",
         [input.source, a.guest],
       );
       if (!prior.rows[0])
         throw new DomainError("Reference model not found", 404);
-      reference = prior.rows[0].design || prior.rows[0].blueprint;
+      if (
+        !target ||
+        (prior.rows[0].target === target && prior.rows[0].status === "ready")
+      ) {
+        reference = prior.rows[0].design || prior.rows[0].blueprint;
+        if (target) snapshot = prior.rows[0].snapshot;
+      } else if (prior.rows[0].target !== target)
+        throw new DomainError("That draft belongs to another workshop", 409);
     }
     await c.query(
-      "INSERT INTO ai_generations(id,guest,prompt,model,source,reference,lease_until) VALUES($1,$2,$3,$4,$5,$6::jsonb,clock_timestamp()+interval '3 minutes')",
+      "INSERT INTO ai_generations(id,guest,prompt,model,source,reference,target,snapshot,lease_until) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb,clock_timestamp()+interval '3 minutes')",
       [
         input.id,
         a.guest,
@@ -136,10 +182,69 @@ export async function createGeneration(
         model(),
         input.source || null,
         reference ? JSON.stringify(reference) : null,
+        target,
+        snapshot ? JSON.stringify(snapshot) : null,
       ],
     );
   });
   return getGeneration(a, input.id);
+}
+
+async function workshopSnapshot(
+  c: PoolClient,
+  world: string,
+): Promise<AISnapshot> {
+  // Both collections share one SQL statement snapshot, including concurrent edits.
+  const { rows } = await c.query(
+    "SELECT title,generation,(SELECT coalesce(jsonb_agg(p ORDER BY p.id),'[]'::jsonb) FROM part_instances p WHERE p.world=w.id AND p.deleted=0) AS parts,(SELECT coalesce(jsonb_agg(e ORDER BY e.id),'[]'::jsonb) FROM part_connections e WHERE e.world=w.id AND e.deleted=0) AS connections FROM worlds w WHERE id=$1",
+    [world],
+  );
+  const row = rows[0];
+  return {
+    generation: row.generation,
+    title: row.title,
+    parts: row.parts.map(partFromRow),
+    connections: row.connections.map(({ id, a, b, ca, cb, revision }: any) => ({
+      id,
+      a,
+      b,
+      ca,
+      cb,
+      revision,
+    })),
+  };
+}
+
+export async function listGenerations(a: Identity, target: string) {
+  await transaction((c) => lockAccess(c, a, target, false));
+  await expireGenerations();
+  const { rows } = await pool.query(
+    `SELECT ${publicColumns},blueprint FROM ai_generations WHERE guest=$1 AND (target=$2 OR world=$2) ORDER BY created_at DESC LIMIT 50`,
+    [a.guest, target],
+  );
+  return rows.reverse().map((row) => ({
+    ...row,
+    parts:
+      row.blueprint && ["ready", "accepted"].includes(row.status)
+        ? compileBlueprint(row.blueprint).parts
+        : [],
+  }));
+}
+
+export async function recordDrawing(
+  id: string,
+  preview: { parts: import("../shared/types").Part[]; title: string },
+) {
+  const result = await pool.query(
+    "UPDATE ai_generations SET preview=$2::jsonb,preview_version=preview_version+1,activity=$3,updated_at=clock_timestamp() WHERE id=$1 AND status=ANY($4::text[]) RETURNING id",
+    [
+      id,
+      JSON.stringify(preview),
+      `Drawing ${preview.parts.length} pieces`,
+      running,
+    ],
+  );
+  return !!result.rowCount;
 }
 
 const system = `You are a skilled brick model designer. Build attractive, recognisable miniature models for Neonbricks.
@@ -162,6 +267,10 @@ export type GenerateCandidate = (
   signal: AbortSignal,
   model: string,
   previous?: Design,
+  draw?: (preview: {
+    parts: import("../shared/types").Part[];
+    title: string;
+  }) => Promise<void>,
 ) => Promise<{ blueprint: unknown; inputTokens: number; outputTokens: number }>;
 type CandidateAttempt = {
   blueprint: unknown;
@@ -178,7 +287,7 @@ export async function recordGenerationAttempt(
   result?: CandidateAttempt,
 ) {
   const update = await pool.query(
-    "UPDATE ai_generations SET status=$2,attempt=$3::int,blueprint=COALESCE($4::jsonb,blueprint),issues=$5::jsonb,input_tokens=input_tokens+$6,output_tokens=output_tokens+$7,attempts=CASE WHEN $4::jsonb IS NULL THEN attempts ELSE attempts||jsonb_build_object(($3::int)::text,$9::jsonb) END,updated_at=clock_timestamp() WHERE id=$1 AND status=ANY($8::text[]) RETURNING id",
+    "UPDATE ai_generations SET status=$2,attempt=$3::int,blueprint=COALESCE($4::jsonb,blueprint),issues=$5::jsonb,input_tokens=input_tokens+$6,output_tokens=output_tokens+$7,attempts=CASE WHEN $4::jsonb IS NULL THEN attempts ELSE attempts||jsonb_build_object(($3::int)::text,$9::jsonb) END,activity=$10,updated_at=clock_timestamp() WHERE id=$1 AND status=ANY($8::text[]) RETURNING id",
     [
       id,
       stage,
@@ -189,6 +298,13 @@ export async function recordGenerationAttempt(
       result?.outputTokens || 0,
       running,
       result ? JSON.stringify(result) : null,
+      result && Array.isArray(result.issues) && result.issues.length
+        ? `Found ${result.issues.length} fit ${result.issues.length === 1 ? "issue" : "issues"}; adjusting the design`
+        : stage === "checking"
+          ? "Checking collisions and connections"
+          : attempt > 1
+            ? `Adjusting the design · pass ${attempt}`
+            : "Designing the model",
     ],
   );
   return !!update.rows[0];
@@ -199,10 +315,12 @@ export const generateCandidate: GenerateCandidate = async (
   signal,
   modelId,
   previous,
+  draw,
 ) => {
   let usage = { inputTokens: 0, outputTokens: 0 };
+  let streamError: unknown;
   try {
-    const result = await generateText({
+    const result = streamText({
       model: neon(modelId),
       output: previous
         ? Output.object({ schema: designPatchSchema, name: "design_patch" })
@@ -220,6 +338,9 @@ export const generateCandidate: GenerateCandidate = async (
         ? { openai: { reasoningEffort: "low" } }
         : undefined,
       abortSignal: signal,
+      onError: ({ error }) => {
+        streamError = error;
+      },
       onFinish: ({ totalUsage }) => {
         usage = {
           inputTokens: totalUsage.inputTokens || 0,
@@ -227,12 +348,28 @@ export const generateCandidate: GenerateCandidate = async (
         };
       },
     });
+    let lastDraw = 0;
+    let lastImage = "";
+    for await (const partial of result.partialOutputStream) {
+      signal.throwIfAborted();
+      if (!draw || performance.now() - lastDraw < 800) continue;
+      const image = streamingPreview(partial, previous);
+      if (!image) continue;
+      const signature = JSON.stringify(image);
+      if (signature === lastImage) continue;
+      lastDraw = performance.now();
+      lastImage = signature;
+      await draw(image);
+    }
+    const output = await result.output;
+    const totalUsage = await result.totalUsage;
     return {
-      blueprint: result.output,
-      inputTokens: result.totalUsage.inputTokens || 0,
-      outputTokens: result.totalUsage.outputTokens || 0,
+      blueprint: output,
+      inputTokens: totalUsage.inputTokens || 0,
+      outputTokens: totalUsage.outputTokens || 0,
     };
   } catch (error) {
+    if (streamError) throw streamError;
     if (NoOutputGeneratedError.isInstance(error))
       return { blueprint: {}, ...usage };
     if (!NoObjectGeneratedError.isInstance(error)) throw error;
@@ -374,7 +511,18 @@ export async function runGeneration(a: Identity, id: string) {
       row.prompt,
       row.model,
       signal,
-      generateCandidate,
+      (prompt, repair, signal, model, previous) =>
+        generateCandidate(
+          prompt,
+          repair,
+          signal,
+          model,
+          previous,
+          async (preview) => {
+            if (!(await recordDrawing(id, preview))) controller.abort();
+            signal.throwIfAborted();
+          },
+        ),
       async (attempt, stage, result) => {
         if (!(await recordGenerationAttempt(id, attempt, stage, result)))
           controller.abort();
@@ -384,12 +532,16 @@ export async function runGeneration(a: Identity, id: string) {
     );
     signal.throwIfAborted();
     await pool.query(
-      "UPDATE ai_generations SET status='ready',blueprint=$2::jsonb,design=$4::jsonb,issues=NULL,lease_until=NULL,updated_at=clock_timestamp() WHERE id=$1 AND status=ANY($3::text[])",
+      "UPDATE ai_generations SET status='ready',blueprint=$2::jsonb,design=$4::jsonb,preview=$5::jsonb,preview_version=preview_version+1,activity='Ready to apply',issues=NULL,lease_until=NULL,updated_at=clock_timestamp() WHERE id=$1 AND status=ANY($3::text[])",
       [
         id,
         JSON.stringify(compiled.blueprint),
         running,
         compiled.design ? JSON.stringify(compiled.design) : null,
+        JSON.stringify({
+          parts: compiled.parts,
+          title: compiled.blueprint.title,
+        }),
       ],
     );
   } catch (error) {
@@ -416,7 +568,7 @@ export async function runGeneration(a: Identity, id: string) {
 export async function cancelGeneration(a: Identity, id: string) {
   await getGeneration(a, id);
   await pool.query(
-    "UPDATE ai_generations SET status='cancelled',updated_at=clock_timestamp() WHERE id=$1 AND guest=$2 AND status=ANY($3::text[])",
+    "WITH RECURSIVE drafts AS (SELECT id,source,target FROM ai_generations WHERE id=$1 AND guest=$2 AND status='ready' UNION ALL SELECT g.id,g.source,g.target FROM ai_generations g JOIN drafts d ON g.id=d.source WHERE g.guest=$2 AND g.status='ready' AND g.target IS NOT DISTINCT FROM d.target) UPDATE ai_generations SET status='cancelled',updated_at=clock_timestamp() WHERE guest=$2 AND (id=$1 OR id IN (SELECT id FROM drafts)) AND status=ANY($3::text[])",
     [id, a.guest, [...active, "ready"]],
   );
   controllers.get(id)?.abort();
@@ -437,7 +589,7 @@ export async function acceptGeneration(a: Identity, id: string) {
     );
     if (!session.rows[0]) throw new DomainError("Session expired", 401);
     const { rows } = await c.query(
-      "SELECT status,world,blueprint FROM ai_generations WHERE id=$1 AND guest=$2 FOR UPDATE",
+      "SELECT status,world,blueprint,target,snapshot FROM ai_generations WHERE id=$1 AND guest=$2 FOR UPDATE",
       [id, a.guest],
     );
     const row = rows[0];
@@ -454,6 +606,39 @@ export async function acceptGeneration(a: Identity, id: string) {
       throw new DomainError(
         "This build has changed. Please refresh the preview.",
       );
+    if (row.target) {
+      await lockAccess(c, a, row.target);
+      const snapshot = row.snapshot as AISnapshot | null;
+      if (!snapshot)
+        throw new DomainError("This draft has no workshop snapshot");
+      const current = await workshopSnapshot(c, row.target);
+      if (!sameAISnapshot(current, snapshot))
+        throw new DomainError(
+          "The model changed while AI was building. Keep the current model and ask again.",
+        );
+      const edit = aiWorkshopEdit(snapshot, compiled.parts, id, randomUUID);
+      if (edit.changes?.length) {
+        const receipt = await executeInTransaction(c, a, row.target, edit);
+        if (!receipt.accepted)
+          throw new DomainError(
+            receipt.error || "The workshop changed. Please ask again.",
+          );
+      }
+      await c.query(
+        "UPDATE ai_generations SET status='accepted',world=$2,activity='Applied to the workshop',updated_at=clock_timestamp() WHERE id=$1",
+        [id, row.target],
+      );
+      // Title-only updates do not need an exclusive lock on an occupied workshop.
+      if (!snapshot.parts.length)
+        await c.query("UPDATE worlds SET title=$2 WHERE id=$1", [
+          row.target,
+          compiled.blueprint.title,
+        ]);
+      const world = await c.query("SELECT slug FROM worlds WHERE id=$1", [
+        row.target,
+      ]);
+      return world.rows[0];
+    }
     const world = await insertWorld(c, compiled.blueprint.title, a.guest);
     const ids = new Map(compiled.parts.map((p) => [p.id, randomUUID()]));
     const parts = compiled.parts.map((p) => ({

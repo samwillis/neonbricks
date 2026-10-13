@@ -24,6 +24,7 @@ import {
   AI_BUILDER_VERSION,
   createGeneration,
   getGeneration,
+  listGenerations,
   runGeneration,
   cancelGeneration,
   acceptGeneration,
@@ -190,13 +191,27 @@ app.post("/api/ai/generations", async (c) => {
       id: z.uuid(),
       prompt: z.string().trim().min(3).max(1200),
       source: z.uuid().optional(),
+      target: z.uuid().optional(),
+      newWorld: z.boolean().optional(),
     })
+    .refine(
+      (v) => !v.newWorld || (!v.target && !v.source),
+      "Choose a new or existing workshop",
+    )
     .parse(await c.req.json());
   return c.json(await createGeneration(c.get("identity"), input), 201);
 });
 app.get("/api/ai/generations/:id", async (c) =>
   c.json(
     await getGeneration(c.get("identity"), z.uuid().parse(c.req.param("id"))),
+  ),
+);
+app.get("/api/worlds/:world/ai", async (c) =>
+  c.json(
+    await listGenerations(
+      c.get("identity"),
+      z.uuid().parse(c.req.param("world")),
+    ),
   ),
 );
 app.get("/api/ai/generations/:id/live", async (c) => {

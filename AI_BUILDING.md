@@ -1,8 +1,8 @@
 # Building models with AI
 
-Open the workshop menu and choose **Build with AI**. Describe a small model and wait for a validated 3D preview. You can describe a change and choose **Update model** repeatedly before choosing **Use this model**. Acceptance creates a new collaborative workshop. Generated pieces support normal selection, snapping, recolouring, undo and collaborative editing.
+Open the workshop menu and choose **Build with AI**. A prompt opens a new blank workshop immediately. Completed design rows appear on its canvas as Gateway structured output streams through Postgres and Realtime. The side chat shows drawing counts, elapsed time, collision/connection checks and repair passes. These are draft previews; generated pieces enter the collaborative model only when you choose **Apply to model**.
 
-The last valid preview stays visible during an update and remains usable if the update fails or is cancelled. **Start a new model** clears the current draft selection. Closing or reloading the dialog restores the current request and previous preview from session storage.
+The header's **AI** button opens the chat in any workshop. Follow-up prompts use a snapshot of the current model, including manual edits, or refine an unapplied draft. **Keep current** sets aside the preview; **Stop** cancels active work. The last valid draft remains usable if a newer update fails. The conversation persists in Postgres, is private to its guest author, and restores after closing the panel or reloading. Applied edits are shared with collaborators and support normal selection, snapping, recolouring and undo.
 
 ## Compact design contract
 
@@ -99,13 +99,13 @@ Each generation has at most three model calls, each capped at 12,000 output toke
 
 The browser reserves an operation UUID and starts a bounded HTTP request to the Neon Function. Requests use existing guest authentication. Only that guest can read, subscribe to, cancel or accept their draft. The browser receives no Gateway credential.
 
-Postgres `ai_generations` stores prompt, model, status, canonical blueprint, compact design, per-attempt candidates and issues, elapsed inference time, token counts, source reference and accepted workshop. Each completed inference contributes token usage once. Realtime publishes meaningful progress stages. The dialog renews its capability every 40 seconds, polls every five seconds while busy, and guards against delayed responses reversing cancellation or newer progress.
+Postgres `ai_generations` stores prompt, model, status, canonical blueprint, compact design, per-attempt candidates and issues, elapsed inference time, token counts, source reference, target workshop, scene snapshot and streamed drawing. Each completed inference contributes token usage once. Completed design rows or patch changes are published at most once every 800 ms, with actual activity text and a preview revision. Realtime carries drawing updates directly from the JSON column. The panel renews its capability every 40 seconds, polls every five seconds while busy, and guards against delayed responses reversing cancellation or newer progress. Invalid or incomplete schema rows are never drawn; a partial drawing can still have fit issues until final validation.
 
-A refinement reserves a new generation with `source` pointing to a ready or accepted owned draft. Reservation captures an immutable reference snapshot. It refines that draft, not subsequent edits to an accepted workshop. No inference occurs inside a database transaction, and drafts do not change a workshop until acceptance.
+A workshop prompt captures parts, revisions, connections and generation in one SQL statement. Up to 100 existing pieces become compact rows with stable local IDs, so patches preserve their database identities. Larger models use a complete version 1 reference without truncation. A refinement can reserve a generation with `source` pointing to an owned ready draft; it then inherits that draft's original workshop snapshot. After application, the next prompt snapshots the live workshop again. No inference occurs inside a database transaction, and drafts do not change workshop pieces until acceptance.
 
 Functions can be evicted. Work uses a bounded HTTP invocation, not a durable background queue. A lease expires interrupted jobs into failure; queued requests can resume idempotently. Cancellation is persisted, aborts local inference, and is checked across isolates every two seconds. Late results cannot overwrite cancelled or expired work. The previous valid preview remains available for acceptance.
 
-Acceptance revalidates the canonical blueprint and current session, locks the generation row, and creates workshop, buckets, pieces, connections and claims in one transaction. Local IDs become fresh UUIDs. Concurrent acceptance returns the same workshop. Subsequent edits use existing neighbourhood locks and revision rules; generation never locks a workshop.
+Acceptance revalidates the blueprint, session and workshop access, then checks the captured scene against the live model. A concurrent edit or reset rejects stale application. The generation row, normal edit receipt, pieces, connections, claims and undo history commit in one transaction. Changed existing pieces keep their IDs; added pieces get fresh UUIDs. The same spatial buckets and part/connector revision rules used by manual editing handle conflicts after lock waits. AI apply/compensation permits up to 480 changes for a complete 240-piece replacement; the browser's manual edit API remains capped at 100 changes. Concurrent acceptance returns the same workshop. Old drafts without a target retain the previous create-a-workshop acceptance path.
 
 ## Configuration and limits
 
@@ -123,6 +123,7 @@ The health response includes `aiBuilder`, a source-version marker. Deployment ca
 npm test
 npm run build
 npm run test:ai
+npm run test:ai:workshop
 ```
 
 The default integration test makes no paid inference calls. It verifies access isolation, Realtime progress, real SQL attempt recording, usage accounting, reference ownership/snapshotting, idempotency, concurrent acceptance, topology, normal editing, cancellation, invalid-candidate rollback and lease expiry. It closes its disposable workshop and deletes only its own synthetic job records. Unit tests cover compact expansion, assembly yaws, explicit front orientation, actual surface support, patch preservation, bounded repair, small stud-placement correction using a real failed rover fixture, and response ordering.
