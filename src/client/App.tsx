@@ -18,6 +18,7 @@ import {
   Link2,
   Check,
   Box,
+  Code2,
   ArrowUpRight,
   HelpCircle,
   X,
@@ -1307,9 +1308,18 @@ export default function App() {
           {state.connections.length} connections
         </span>
         <div className="footer-spacer" />
-        <span className="footer-message">Build together in realtime</span>
         <a
-          href="https://neon.com"
+          href="https://github.com/samwillis/neonbricks"
+          target="_blank"
+          rel="noreferrer"
+          className="powered"
+          aria-label="How we built it on GitHub"
+        >
+          How we built it
+          <Code2 size={11} />
+        </a>
+        <a
+          href="https://neon.com/docs/realtime/overview"
           target="_blank"
           rel="noreferrer"
           className="powered"
