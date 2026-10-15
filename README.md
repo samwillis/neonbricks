@@ -1,147 +1,108 @@
 # Neon Bricks
 
-A collaborative Three.js construction workshop. Postgres stores the model, connections, guests, presence, history, and command receipts. Neon Functions validate edits, and Neon Realtime publishes the committed scene.
+Build a brick model together in your browser. Neon Bricks is a collaborative 3D workshop with snapping bricks, mechanical parts, shared cursors, undo/redo, and an AI builder you can chat with. Share a workshop URL to build with someone else or follow the same model on another device.
 
-The demo includes 36 procedural parts, 12 colours, a starter rover and workbench, placement and connector snapping, multi-selection, move/copy/rotate/recolour/delete, personal undo/redo, collaborator cursors, previews and selection outlines, camera presets, presentation mode, light and dark themes, and a demo inspector.
+It demonstrates [Neon Realtime](https://neon.com/docs/realtime/overview): live SQL subscriptions that keep clients in sync as data changes in Postgres. The model, collaborator presence, and AI conversation all live in Postgres, with updates delivered through Realtime.
 
-Mechanical assemblies are static. Axles and pins fit authored holes; gears have fixed cardinal mesh poses; hinge leaves pair in a coplanar pose. Free-angle joints, physical simulation, and motors belong to the subsequent phases in [PLAN.md](PLAN.md).
+**[Open the demo](https://neonbricks-app.vercel.app)** · **[Read the Neon Realtime docs](https://neon.com/docs/realtime/overview)**
 
-The workshop menu also includes **Build with AI**: a prompt opens a new canvas, where completed pieces appear while Neon AI Gateway designs the model. A shared **AI** side chat supports follow-up instructions in any workshop, including models you have edited by hand. Workshop members see the same authored conversation and streamed draft across devices through Realtime. Review each draft, then apply it to the same model as one undoable edit. Compact repetitions and verified assemblies expand to ordinary editable pieces. Progress, drawings and chat live in Postgres and arrive through Realtime. See [AI_BUILDING.md](AI_BUILDING.md) for the format, limits and setup.
+## Built on Neon
 
-## Hosted demo
+Alongside Realtime, the demo uses:
 
-Open [neonbricks-app.vercel.app](https://neonbricks-app.vercel.app). Vercel serves only the static frontend. It connects directly to the existing Neon Function, Realtime, Postgres and AI Gateway in the **Sam staging workspace**. Workshop URLs can be shared across devices, and their AI conversation and drafts sync through Postgres and Realtime.
+- **Neon Postgres** to store workshop pieces, their connections, guest memberships, presence, edit history, and AI conversations. Transactions keep simultaneous edits consistent, including preventing two builders from placing pieces in the same space.
+- **Neon Functions** for the backend API. Functions authenticate guests, authorize Realtime subscriptions, commit workshop edits, and run AI builds alongside the database.
+- **Neon AI Gateway** to generate and refine models from text prompts. The Function calls the Gateway, writes progress and draft pieces to Postgres, and Realtime delivers them to everyone in the workshop.
 
-## Run the existing staging demo
+The frontend uses React and Three.js and is hosted on Vercel. The API, database, Realtime, and AI run on Neon.
 
-Requirements: Node 22.18 or newer. The unpublished SDK packages are included as pinned tarballs in `.sdk/`, so the app does not need the CLI to run.
+## Try it
+
+Start with the rover or a blank canvas, then choose from 36 parts and 12 colours. Click to place a part, drag existing pieces to move them, and snap onto other bricks or compatible mechanical connectors. Wheels, axles, gears, and hinges fit together as static assemblies.
+
+Share the workshop URL with another browser or device. You can see each other's cursors, selections, and placement previews while building. Each builder has their own undo/redo history.
+
+Choose **Build with AI** to describe a new model, or open **AI** in an existing workshop to ask for changes. Watch the draft appear on the canvas, then choose **Apply to model** to add it as one undoable edit. The chat and draft are shared across the workshop, so collaborators can follow a build as it happens and continue the conversation.
+
+| Action             | Control                                    |
+| ------------------ | ------------------------------------------ |
+| Orbit / pan / zoom | Drag the background / right-drag / scroll  |
+| Select / move      | Click a piece / drag it or its X/Y/Z arrow |
+| Select several     | Shift-click                                |
+| Rotate             | R                                          |
+| Duplicate          | Cmd-or-Ctrl D                              |
+| Delete             | Delete or Backspace                        |
+| Undo / redo        | Cmd-or-Ctrl Z / Shift Cmd-or-Ctrl Z        |
+| Cancel placement   | Escape                                     |
+
+The **Display** menu switches between light and dark themes and controls the grid and lighting. Presentation mode gives the model more space. Desktop browsers support the full editor; smaller screens can follow the model and shared AI chat.
+
+## How it is built
+
+### Live workshop state
+
+The browser sends edit commands to a Neon Function over HTTP. The Function checks the edit and commits the pieces, connections, and history in a Postgres transaction. Neon Realtime then delivers the committed state to subscribed browsers.
+
+A single scene query combines the workshop, pieces, and connections so the browser can apply each scene update together. Presence, personal undo history, member details, and workshop AI chat use separate live queries over the same WebSocket connection. Clients subscribe to database changes instead of polling for workshop updates.
+
+Functions issue short-lived, sealed queries scoped to the guest's workshop membership. The browser renews these capabilities while connected; database and Realtime sealing credentials stay on the backend.
+
+### Concurrent building
+
+The scene uses a 32 × 32 stud board, with coordinates stored as integer sixths of a stud. Geometry and connector definitions are shared between the browser and backend, giving local placement previews and server-side checks the same rules.
+
+Geometric edits lock the affected spatial buckets and piece rows. Collision checks, connections, revisions, and undo history commit together. Builders working in distant parts of a workshop can edit concurrently without taking a single exclusive lock for the whole scene. Stale or conflicting edits are rejected without partially changing the model.
+
+Collaborator cursors and placement previews are stored in Postgres presence records and delivered through a Realtime subscription. Cursor positions use world coordinates, so they point at the same brick even when collaborators have different camera views. The frontend interpolates incoming positions for smooth movement.
+
+### Shared AI building
+
+An AI prompt creates a Postgres generation record and starts work in a Neon Function. The Function calls Neon AI Gateway for a structured design, expands repeated pieces and assemblies, and checks that the result fits together. Progress, streamed drawings, and the conversation are written to Postgres and arrive through the workshop's Realtime subscription.
+
+Generation continues after the initial HTTP response. Applying a draft uses the same transactional editing system as manual building, with a check that the model has not changed since the AI captured it. Generated pieces remain ordinary editable bricks. See [AI_BUILDING.md](AI_BUILDING.md) for the design format and AI workflow.
+
+### Source layout
+
+| Path                       | Contents                                                                          |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| [src/client/](src/client/) | React editor, Three.js scene, live subscriptions, and collaborative cursors       |
+| [src/server/](src/server/) | Function API, guest sessions, transactional edits, live queries, and AI execution |
+| [src/shared/](src/shared/) | Part catalogue, geometry, connectors, snapping, and AI design formats             |
+| [drizzle/](drizzle/)       | Postgres migrations                                                               |
+| [neon.ts](neon.ts)         | Neon Function, Realtime origins, AI Gateway, and scheduled jobs                   |
+
+## Run locally
+
+You need Node.js 22.18 or newer and a Neon project with Realtime enabled. To use the AI builder, enable Neon AI Gateway on the same branch. The Neon SDK packages used by the demo are pinned in `.sdk/` and installed by `npm ci`.
 
 ```sh
+git clone https://github.com/samwillis/neonbricks.git
+cd neonbricks
 npm ci
-npm run dev
+cp .env.example .env.local
 ```
 
-Open <http://127.0.0.1:5173>. The ignored `.env.local` currently points the browser directly at the deployed Neon Function. The local API on port 3001 is also available; empty `VITE_API_URL` selects Vite's local proxy.
+Fill in `.env.local` with your Neon branch's connection details and Realtime settings:
 
-Existing resources are in **Sam**, in **staging**:
+| Variable                 | Value                                                                    |
+| ------------------------ | ------------------------------------------------------------------------ |
+| `DATABASE_URL`           | Postgres connection string for the API                                   |
+| `DATABASE_URL_UNPOOLED`  | Direct Postgres connection string for migrations                         |
+| `REALTIME_SECRET`        | Server-side secret for sealing Realtime queries                          |
+| `REALTIME_URL`           | Realtime WebSocket URL for the Function's subscriptions                  |
+| `VITE_NEON_REALTIME_URL` | The same Realtime WebSocket URL, used by the browser                     |
+| `VITE_API_URL`           | Leave empty to use the local API through Vite's proxy                    |
+| `ALLOWED_ORIGINS`        | Browser origins allowed by the API; the example includes local Vite URLs |
 
-| Resource          | Value                                                                                     |
-| ----------------- | ----------------------------------------------------------------------------------------- |
-| Console           | <https://console-stage.neon.build/>                                                       |
-| Workspace         | `org-wandering-poetry-25631650`                                                           |
-| Project           | `quiet-dew-89918880` — neon-bricks                                                        |
-| Branch            | `br-withered-sky-w2mvp9ef` — main                                                         |
-| Region / Postgres | `aws-us-east-2` / 18                                                                      |
-| Function          | <https://br-withered-sky-w2mvp9ef-bricks.compute.c-1.us-east-2.aws.neon.build/api/health> |
+For local AI builds, also set `NEON_AI_GATEWAY_BASE_URL` and `NEON_AI_GATEWAY_TOKEN`. `AI_MODEL` optionally selects the Gateway model; it defaults to `gpt-5-4`. Only the public endpoint variables use the `VITE_` prefix; database, sealing, and Gateway credentials stay on the server.
 
-Keep `.env.local`, `.neon`, and `.tools/` private. The browser needs only `VITE_API_URL` and `VITE_NEON_REALTIME_URL`; database credentials and the sealing secret stay on the backend.
-
-## Controls and demonstration
-
-Pick a part and click the board to place it, then return to selection. Enable **Keep placing** to add several of the same piece. While placing, click an existing brick to stack or attach the new piece. Green previews fit; red previews conflict. Hover another part for a compatible connector pose. Hover the upper edge of a brick to catch its studs, or hold Alt for sixth-stud positioning. Use the Y arrow after selection for explicit height.
-
-Click an existing piece to select it and reveal the X/Y/Z arrows. Drag onto another part to snap to its top, side, or compatible connector, preserving your grab point. Away from other parts, dragging keeps the original height. Placement, M pickup, and copying use the same surface and connector snapping. New mechanical pieces can orient automatically to a fitting connector; moving a selection preserves its rotations and relative positions. Drag an arrow to constrain movement; Y raises or lowers the selection in plate increments. Shift-click adds or removes pieces; dragging an already selected piece moves the group together. Release submits one edit for the whole selection. Escape cancels; an invalid drop leaves the originals in place. Revisions and incident connections captured at pickup let Postgres reject a conflicting concurrent edit.
-
-| Action             | Control                                                         |
-| ------------------ | --------------------------------------------------------------- |
-| Camera             | Drag the background to orbit, right-drag to pan, scroll to zoom |
-| Move directly      | Drag a piece, or drag its X/Y/Z arrow                           |
-| Rotate             | R                                                               |
-| Select several     | Shift-click                                                     |
-| Pickup / duplicate | M, then click to place / Cmd-or-Ctrl D                          |
-| Delete             | Delete or Backspace                                             |
-| Undo / redo        | Cmd-or-Ctrl Z / Shift Cmd-or-Ctrl Z                             |
-| Cancel             | Escape                                                          |
-
-The room menu creates a rover room or blank canvas. Share that room's URL with a second browser/profile. Rename builders from their avatar. The creator can restore the starter, clear, close, and reopen their own room. Use presentation mode to hide the drawer and editing tools; the inspector shows transaction IDs, pending work, connection counts, and frame timing.
-
-Each collaborator has a coloured pointer and name on the brick or board under their mouse. Cursor positions are shared in world coordinates, so they stay attached to the same surface when people use different cameras. They clear when the mouse leaves the canvas, the browser loses focus, or the tab is hidden. Presentation mode hides them along with the editing tools.
-
-The **Display** menu in the header selects Light, Dark, or System, and toggles the construction grid and enhanced lighting. Turning enhanced lighting off reduces shadow detail and render resolution for better performance. System follows your operating system; an explicit theme choice persists in this browser and synchronizes across open tabs. The panels, thumbnails, board, lighting, and selection indicators all follow the theme. The demo inspector has a canvas toggle and a close button; Escape also closes it. The interface takes its typography and palette from neon.com. Its custom `neonbricks` wordmark matches the Databricks lettering, with a stylised line-drawn brick symbol on the left. Inter and the logo are bundled locally; provenance and the font licence are recorded under `public/brand/` and `public/fonts/`.
-
-For a presentation, create your own rover workshop and keep its URL. Reset that room between demonstrations. The default shared workshop is independent of visitor-created rooms and cannot be reset by a visitor.
-
-## Provisioning and deployment
-
-The pinned toolchain is `neondatabase/neon-pkgs` commit `5e276fdb4114555eac89f6033b15e6ff5e9e7eb4`, from `kevin-dp/realtime-env-pull`. Build the CLI in an ignored checkout:
-
-```sh
-git clone https://github.com/neondatabase/neon-pkgs.git .tools/neon-pkgs
-git -C .tools/neon-pkgs checkout 5e276fdb4114555eac89f6033b15e6ff5e9e7eb4
-cd .tools/neon-pkgs
-corepack pnpm install --frozen-lockfile --ignore-scripts
-corepack pnpm --filter 'neon...' build
-cd ../..
-```
-
-The repository pins pnpm 10.30.3; `mise exec -- pnpm` is another option. To reproduce the SDK tarballs, build the relevant packages and use **pnpm pack**, which rewrites workspace dependencies. `.sdk/README.md` records provenance.
-
-The wrapper in `scripts/neon.mjs` selects the staging API, OAuth host, and credentials profile on every call. Sign in with the existing Neon CLI if necessary:
-
-```sh
-NEON_API_HOST=https://console-stage.neon.build/api/v2 \
-NEON_OAUTH_HOST=https://oauth2-stage.neon.build \
-neon login --profile staging
-```
-
-For another environment, copy `.env.example` to a private env file, link a project in **Sam**, and enable PG18, logical replication, and Realtime. Obtain the socket URL and server secret from the staging Realtime API. Do not create a production project for this preview.
+Apply the migrations and start the app:
 
 ```sh
 npm run db:migrate
-npm run neon -- config plan --env .env.local
-npm run neon -- deploy --env .env.local --no-env-pull --update-existing
-npm run build
+npm run dev
 ```
 
-Migrations use the direct connection and verify TLS certificates. The app reuses a module-level `pg` pool. `neon.ts` declares the Function, its secrets, permitted origins, a five-minute authenticated cleanup trigger, and a one-minute AI reconciliation trigger. Review the plan before applying changes to another branch.
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite serves the frontend and proxies API requests to the local Node server on port 3001. Postgres, Realtime, and AI Gateway run on your Neon branch. Allow the local frontend origin in that branch's Realtime configuration as well. Restart the app after changing environment variables.
 
-The frontend is deployed to Vercel project **neonbricks-app** in **samwillis-projects**, at <https://neonbricks-app.vercel.app>. `vercel.json` declares the Vite build, `dist/` output and SPA fallback. Vercel stores only `VITE_API_URL` and `VITE_NEON_REALTIME_URL`; database, sealing and Gateway credentials stay on Neon. The exact production origin is included in Function CORS and Realtime's allowed origins. Other Vercel aliases and preview URLs need their own explicit origin allowance before they can connect.
-
-To republish the frontend:
-
-```sh
-vercel link --yes --project neonbricks-app --scope samwillis-projects
-vercel env pull .env.production.local --environment=production --yes --scope samwillis-projects
-npm run build:vercel
-vercel deploy --prebuilt --prod --yes --scope samwillis-projects
-```
-
-`build:vercel` packages the verified Vite build using Vercel's Build Output API. Uploads contain only static assets, with filesystem routing followed by the SPA fallback and no Vercel Functions. `.vercel/` and private env files are ignored. The project currently deploys through the CLI; GitHub push-triggered deployment is not connected.
-
-After a release, keep its Git commit, pinned SDK tarballs, private environment file, and migration journal. To recover an earlier compatible application version, check out its commit in a separate checkout, install its lockfile, build the frontend, review the staging config plan, and redeploy its Function and frontend together. Preserve the database and receipts. Schema and catalogue changes need a forward-compatible migration before rolling application code back; the current schema has no destructive down-migration. The initial demo establishes the first runnable recovery baseline, so a previous-release rollback rehearsal remains a public-release check.
-
-## Model and concurrency
-
-Coordinates are integer sixths of a stud. One plate is two units high; the board spans 32 × 32 studs, with 16 studs of available height. The catalogue permits four yaw rotations. Authored occupancy masks keep shaft channels empty and validate parts independently of rendered meshes.
-
-Geometric edits lock pre-created four-stud neighbourhood buckets in numeric order, then lock the changed part rows. A fresh READ COMMITTED candidate query runs after any bucket wait. Collision checks, connector discovery, capacity claims, revisions, tombstones, history, and receipts commit together. Distant builders use different buckets. The world row is held with a compatible shared lock during edits; reset and close take its exclusive lifecycle lock.
-
-Appearance edits lock the changed parts and do not rebuild topology. Geometric edits compare the complete incident connection set, including an expected empty set. Undo/redo use compensating commands and effective revision bridges; another builder's changed revision or attachment can reject compensation.
-
-One deterministic `UNION ALL` query carries the header, parts, and connections. It returns typed columns because the preview engine rejects the mutable JSON construction function. The browser assembles objects and applies each authoritative result atomically. Presence, personal history, current-member metadata and workshop AI chat have separate subscriptions over the same socket. Live history is authoritative; delayed HTTP receipts cannot replace undo/redo pointers. Member metadata keeps names, colours and editor/viewer permissions current across devices. Each query reports its own status; an unavailable chat or cursor query does not mark a saved scene unsaved. Capability refresh continues through socket outages using the corrected server clock, and authorization denial detaches the affected subscription.
-
-Guest tokens are opaque and hashed in Postgres. Sessions slide for 30 minutes and have a 24-hour absolute maximum. Every sealed query contains membership and session-revocation predicates; capabilities expire after 60 seconds and renew before expiry. Session expiry denies renewal, so an existing capability can retain access only until its recorded expiry. There is no dependence on RLS in the preview engine.
-
-Viewers heartbeat every ten seconds, expire visually after thirty seconds, and leave immediately on a clean close. Preview and cursor samples are coalesced at up to five requests per second, with one request in flight per viewer. The next sample can leave as soon as that request finishes and the 200 ms minimum between sends has elapsed. A stationary preview or cursor refreshes once per second while the tab is visible; both expire visually after three seconds without samples. A heartbeat does not refresh their timestamps. Cursor positions are fractional sixth-stud coordinates, stored separately from placement previews in `viewer_sessions`; the existing Realtime presence query delivers them. Each cursor follows incoming points with a critically damped spring, adapting to the observed update cadence and preserving velocity across packets. Deleted viewers are never implicitly recreated by a delayed packet; a returning browser rejoins with a new viewer ID.
-
-New rooms accept edits for 24 hours, after which the cleanup job closes them. Closed rooms retain their model and receipts in this staging build; automatic permanent pruning is not enabled. The default workshop is exempt from expiry. There is no ownership recovery after losing a guest session, so create a new presenter room when that happens.
-
-## Verification
-
-```sh
-npm test
-npm run typecheck
-npm run build
-npm run test:db
-npm run test:access
-npm run test:presence
-npm run test:locks
-npm run test:ai
-npm run test:ai:workshop
-npm run test:realtime
-npm run test:capacity
-```
-
-Database checks create disposable, isolated rooms in the linked staging project. `RACE_TRIALS=1 npm run test:db` runs a smoke test. Capacity qualification defaults to 2,000 parts, twelve builders, a 60-second burst at two commands per second per builder, and ten minutes at one command every five seconds. It writes results under ignored `artifacts/`.
-
-See [QUALIFICATION.md](QUALIFICATION.md) for measured results, browser checks, and remaining release work. The preview is intended for desktop editing; narrow screens support viewing and camera inspection.
+To run just the frontend against a deployed Neon Function, set `VITE_API_URL` to its origin, without `/api`, and `VITE_NEON_REALTIME_URL` to its Realtime URL, then run `npm run dev:web`. Include your local frontend origin in both the Function's CORS configuration and Realtime's allowed origins.
